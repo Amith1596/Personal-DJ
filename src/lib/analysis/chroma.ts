@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import Meyda from "meyda";
 
 // Average 12D chroma per beat interval: beats[k]..beats[k+1]

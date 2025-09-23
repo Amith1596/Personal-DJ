@@ -1,4 +1,5 @@
-import Meyda from "meyda";
+import Meyda, { MeydaFeaturesObject } from "meyda";
+
 import { getBpm } from "./getBpm";
 import { getBeatGrid } from "./beatGrid";
 
@@ -14,6 +15,7 @@ export type AnalysisResult = {
   energyProfile: number[];    // smoothed energy (1s resolution)
 };
 
+
 /**
  * Analyze a track (File) and extract:
  * - BPM (tempo)
@@ -23,14 +25,15 @@ export type AnalysisResult = {
  * - Energy profile (smoothed RMS)
  */
 export async function analyzeTrack(file: File): Promise<AnalysisResult> {
-  // Safari fallback
-  const AudioCtx =
-    (window as any).AudioContext || (window as any).webkitAudioContext;
-  const audioCtx: AudioContext = new AudioCtx();
+  // Safari fallback: extend Window type instead of using `any`
+  const AudioContextCtor: typeof AudioContext =
+    (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+
+  const audioCtx = new AudioContextCtor();
 
   // Decode file to an AudioBuffer
   const arrayBuffer = await file.arrayBuffer();
-  const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+  const decoded: AudioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
   // --- BPM + Beat grid ---
   const bpm = (await getBpm(decoded)) || 120;
@@ -59,15 +62,27 @@ export async function analyzeTrack(file: File): Promise<AnalysisResult> {
   for (let i = 0; i + frameSize <= mono.length; i += hopSize) {
     const frame = mono.subarray(i, i + frameSize);
 
-    // Compute RMS + amplitude spectrum
-    const feats = Meyda.extract(["rms", "amplitudeSpectrum"], frame, {
-      sampleRate: decoded.sampleRate,
-      bufferSize: frameSize,
-    } as any);
+    // Meyda.extract expects its signature: (features, signal, params)
+    const feats: Partial<MeydaFeaturesObject> | null = (Meyda.extract as unknown as (
+      features: string[],
+      signal: Float32Array,
+      options: { sampleRate: number; bufferSize: number }
+    ) => Partial<MeydaFeaturesObject> | null)(
+      ["rms", "amplitudeSpectrum"],
+      frame,
+      {
+        sampleRate: decoded.sampleRate,
+        bufferSize: frameSize,
+      }
+    );
+
+
+
+
 
     rms[frameIndex] = feats?.rms ?? 0;
 
-    const amp = feats?.amplitudeSpectrum as Float32Array | undefined;
+    const amp = feats?.amplitudeSpectrum as number[] | undefined;
     if (prevAmp && amp) {
       let flux = 0;
       const len = Math.min(prevAmp.length, amp.length);
@@ -98,7 +113,7 @@ export async function analyzeTrack(file: File): Promise<AnalysisResult> {
   }
 
   // Free resources
-  audioCtx.close();
+  await audioCtx.close();
 
   // --- Debug summary ---
   const avgRms = rms.reduce((sum, v) => sum + v, 0) / (rms.length || 1);

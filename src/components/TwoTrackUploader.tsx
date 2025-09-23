@@ -140,7 +140,7 @@ export default function TwoTrackUploader() {
   }, [fileB]);
 
   // ---------- Handlers ----------
-  async function handlePreview() {
+    async function handlePreview() {
     if (!fileA || !fileB) return;
     setError(null);
     setIsProcessing(true);
@@ -156,8 +156,12 @@ export default function TwoTrackUploader() {
         audioRef.current.currentTime = 0;
         await audioRef.current.play().catch(() => {});
       }
-    } catch (e: any) {
-      setError(e?.message || 'Preview failed');
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError('Preview failed');
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -168,7 +172,6 @@ export default function TwoTrackUploader() {
     setError(null);
     setIsProcessing(true);
     try {
-      // uses current crossfade value from the UI
       const blob = await mixTracks(fileA, fileB, crossfade, vibe, false);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -176,12 +179,17 @@ export default function TwoTrackUploader() {
       a.download = `personal-dj-mix-${Date.now()}.wav`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setError(e?.message || 'Mix failed');
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError('Mix failed');
+      }
     } finally {
       setIsProcessing(false);
     }
   }
+
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-8">
