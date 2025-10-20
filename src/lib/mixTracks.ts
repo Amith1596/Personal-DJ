@@ -1,111 +1,100 @@
-// src/lib/mixTracks.ts
 import { analyzeTrack } from "./analysis/analyzeTrack";
-import { planSplice } from "./analysis/splicePlanner";
-import { buildMixGraph, Vibe } from "./mix/buildMixGraph";
-import type { BlendMode } from "./mix/blendEnvelopes";
-import { audioBufferToWav, sliceAudioBuffer } from "./audio/audioBufferUtils";
+import { basicCrossfade, beatDropTransition, TransitionParams } from "./mix/transitions";
+import { applyBlend, Blend } from "./mix/blends";
 
-/**
- * Decode a File into an AudioBuffer using an OfflineAudioContext.
- */
-async function decodeFile(file: File, sampleRate = 44100): Promise<AudioBuffer> {
-  const ctx = new OfflineAudioContext(2, sampleRate, sampleRate);
-  const ab = await file.arrayBuffer();
-  return await ctx.decodeAudioData(ab);
-}
+export type Vibe =
+  | "dreamy" | "chaotic" | "echoTag" | "tapeStop" | "beatRoll"
+  | "riser"  | "pump"    | "widen"   | "beatDrop";
 
-/**
- * Main mixer:
- * - analyzes tracks (BPM, beats, energy…)
- * - plans a musical splice (sections + energy trough + DTW nudge)
- * - renders either a fixed 30s preview window centered on the splice
- *   or the full-length mix
- * - supports vibe FX and modular blend envelopes
- */
 export async function mixTracks(
   fileA: File,
   fileB: File,
-  crossfadeSeconds = 8,
-  vibe: Vibe = "dreamy",
-  previewOnly = false,
-  blendMode: BlendMode = "overlap"
+  crossfadeSec: number,
+  vibe: Vibe,
+  previewOnly: boolean,
+  blend: Blend = "equalPower"
 ): Promise<Blob> {
-  const sampleRate = 44100;
-
-  // 1) Decode both files
+  const RT =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const rt = new RT();
   const [bufA, bufB] = await Promise.all([
-    decodeFile(fileA, sampleRate),
-    decodeFile(fileB, sampleRate),
+    fileA.arrayBuffer().then((ab) => rt.decodeAudioData(ab)),
+    fileB.arrayBuffer().then((ab) => rt.decodeAudioData(ab)),
   ]);
+  await rt.close();
 
-  // 2) Analyze (re-uses your existing analyzer)
-  const [analysisA, analysisB] = await Promise.all([
-    analyzeTrack(fileA),
-    analyzeTrack(fileB),
-  ]);
+  const [anaA, anaB] = await Promise.all([analyzeTrack(fileA), analyzeTrack(fileB)]);
 
-  // Safe BPMs
-  const bpmA = Number.isFinite(analysisA.bpm) && analysisA.bpm > 0 ? analysisA.bpm : 120;
-  const bpmB = Number.isFinite(analysisB.bpm) && analysisB.bpm > 0 ? analysisB.bpm : 120;
+  const sr = 44100;
+  const ch = 2;
+  const regionDur = previewOnly ? 45 : Math.max(45, crossfadeSec + 20);
+  const frames = Math.ceil(regionDur * sr);
+  const ctx = new OfflineAudioContext(ch, frames, sr);
 
-  // 3) Plan a musical splice
-  const plan = planSplice(analysisA, analysisB, bufA.duration, crossfadeSeconds, bufA, bufB);
+  const spliceCenter = regionDur / 2;
 
-  // 4) Tempo match B → A (±2% clamp)
-  let playbackRateB = bpmA / bpmB;
-  playbackRateB = Math.min(1.02, Math.max(0.98, playbackRateB));
+  const params: TransitionParams = {
+    ctx, bufA, bufB, anaA, anaB,
+    spliceCenter, crossfadeSec, blend
+  };
 
-  if (previewOnly) {
-    // ---------- Fixed 30s PREVIEW (splice-centered) ----------
-    const PRE = 15;
-    const POST = 15;
-    const windowStart = Math.max(0, plan.fadeStart - PRE);
-    const windowDur = PRE + POST; // exactly 30s
-
-    const ctx = new OfflineAudioContext(2, Math.ceil(windowDur * sampleRate), sampleRate);
-
-    // Time-offset the schedule so the splice lives inside the preview window.
-    buildMixGraph(
-      ctx,
-      bufA,
-      bufB,
-      plan,
-      playbackRateB,
-      vibe,
-      bpmA,
-      blendMode,
-      windowStart // timeOffsetSec
-    );
-
-    const rendered = await ctx.startRendering();
-
-    // Safety trim to exactly 30s
-    const exactPreview = sliceAudioBuffer(rendered, 0, windowDur);
-    const wav = audioBufferToWav(exactPreview);
-    return new Blob([wav], { type: "audio/wav" });
+  if (vibe === "beatDrop") {
+    beatDropTransition(params);
+  } else {
+    basicCrossfade(params);
   }
-
-  // ---------- FULL RENDER ----------
-  // How long do we need? Enough for A to play out and B from its entry point.
-  const endA = bufA.duration;
-  const endB = plan.fadeStart + Math.max(0, (bufB.duration - plan.entryBeatB)) / playbackRateB;
-  const fullDuration = Math.min(180, Math.max(endA, endB) + 0.5); // 3 min cap + little tail
-
-  const ctx = new OfflineAudioContext(2, Math.ceil(fullDuration * sampleRate), sampleRate);
-
-  buildMixGraph(
-    ctx,
-    bufA,
-    bufB,
-    plan,
-    playbackRateB,
-    vibe,
-    bpmA,
-    blendMode,
-    0 // no time offset for full render
-  );
 
   const rendered = await ctx.startRendering();
   const wav = audioBufferToWav(rendered);
-  return new Blob([wav], { type: "audio/wav" });
+  return new Blob([new DataView(wav)], { type: "audio/wav" });
+}
+
+function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
+  const numCh = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1, bitDepth = 16;
+
+  const samples = buffer.length * numCh;
+  const blockAlign = (numCh * bitDepth) >> 3;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples * (bitDepth >> 3);
+  const ab = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(ab);
+
+  function wstr(o: number, s: string) {
+    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  }
+
+  let o = 0;
+  wstr(o, "RIFF"); o += 4;
+  view.setUint32(o, 36 + dataSize, true); o += 4;
+  wstr(o, "WAVE"); o += 4;
+  wstr(o, "fmt "); o += 4;
+  view.setUint32(o, 16, true); o += 4;
+  view.setUint16(o, format, true); o += 2;
+  view.setUint16(o, numCh, true); o += 2;
+  view.setUint32(o, sampleRate, true); o += 4;
+  view.setUint32(o, byteRate, true); o += 4;
+  view.setUint16(o, blockAlign, true); o += 2;
+  view.setUint16(o, bitDepth, true); o += 2;
+  wstr(o, "data"); o += 4;
+  view.setUint32(o, dataSize, true); o += 4;
+
+  const chans: Float32Array[] = [];
+  for (let c = 0; c < numCh; c++) chans.push(buffer.getChannelData(c));
+
+  let idx = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let c = 0; c < numCh; c++) {
+      const sample = Math.max(-1, Math.min(1, chans[c][i]));
+      view.setInt16(
+        44 + idx,
+        (sample < 0 ? sample * 0x8000 : sample * 0x7fff) | 0,
+        true
+      );
+      idx += 2;
+    }
+  }
+  return ab;
 }

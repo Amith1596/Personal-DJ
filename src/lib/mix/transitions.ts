@@ -1,4 +1,11 @@
-/** Dreamy sweep = low-pass filter wash (you already have this) */
+import { applyBlend, Blend } from "./blends";
+import { findPrimaryDrop } from "../analysis/dropDetect";
+import { AnalysisResult } from "../analysis/analyzeTrack";
+
+/* =======================================================
+   FX UTILITIES (keep your existing ones)
+======================================================= */
+
 export function applyDreamySweep(
   ctx: OfflineAudioContext,
   node: AudioNode,
@@ -15,7 +22,6 @@ export function applyDreamySweep(
   node.connect(filter).connect(ctx.destination);
 }
 
-/** Chaotic stutter = last ¼-beat repeats before drop (you already have this) */
 export function applyChaoticStutter(
   ctx: OfflineAudioContext,
   buf: AudioBuffer,
@@ -33,22 +39,19 @@ export function applyChaoticStutter(
   }
 }
 
-/* ========================= NEW, TRENDY RECIPES ========================= */
-
-/** 1) Echo Tag — short feedback delay “tag” on A right before B enters */
 export function applyEchoTag(
   ctx: OfflineAudioContext,
   node: AudioNode,
   fadeStart: number,
   secPerBeat: number,
-  lengthBeats = 2 // total echo ring length
+  lengthBeats = 2
 ) {
   const delay = ctx.createDelay(1.0);
   const feedback = ctx.createGain();
   const wet = ctx.createGain();
   const hp = ctx.createBiquadFilter();
 
-  const delayTime = Math.max(0.06, Math.min(0.5, secPerBeat / 2)); // 1/2-beat echo
+  const delayTime = Math.max(0.06, Math.min(0.5, secPerBeat / 2));
   const at = Math.max(0, fadeStart - secPerBeat / 4);
   delay.delayTime.setValueAtTime(delayTime, at);
 
@@ -69,7 +72,6 @@ export function applyEchoTag(
   wet.gain.linearRampToValueAtTime(0, end);
 }
 
-/** 2) Tape-Stop — modern “vinyl brake” on A before cutover */
 export function applyTapeStop(
   srcA: AudioBufferSourceNode,
   ctxCurrentTime: number,
@@ -78,14 +80,11 @@ export function applyTapeStop(
 ) {
   const t0 = Math.max(0, startTime);
   const t1 = t0 + Math.max(0.2, dur);
-
   const r = srcA.playbackRate;
   r.setValueAtTime(Math.max(0.001, r.value), t0);
   r.exponentialRampToValueAtTime(0.05, t1);
-  // caller may schedule srcA.stop(t1) if they want a hard cut
 }
 
-/** 3) Beat-Roll — DJ “loop roll” (1/2 → 1/4 → 1/8 beat slices) */
 export function applyBeatRoll(
   ctx: OfflineAudioContext,
   bufA: AudioBuffer,
@@ -99,23 +98,11 @@ export function applyBeatRoll(
   const start1 = Math.max(0, fadeStart - (d1 + d2 + d3));
   const sliceStart = Math.max(0, bufA.duration - d1);
 
-  const s1 = ctx.createBufferSource();
-  s1.buffer = bufA;
-  s1.start(start1, sliceStart, d1);
-  s1.connect(ctx.destination);
-
-  const s2 = ctx.createBufferSource();
-  s2.buffer = bufA;
-  s2.start(start1 + d1, bufA.duration - d2, d2);
-  s2.connect(ctx.destination);
-
-  const s3 = ctx.createBufferSource();
-  s3.buffer = bufA;
-  s3.start(start1 + d1 + d2, bufA.duration - d3, d3);
-  s3.connect(ctx.destination);
+  const s1 = ctx.createBufferSource(); s1.buffer = bufA; s1.start(start1, sliceStart, d1); s1.connect(ctx.destination);
+  const s2 = ctx.createBufferSource(); s2.buffer = bufA; s2.start(start1 + d1, bufA.duration - d2, d2); s2.connect(ctx.destination);
+  const s3 = ctx.createBufferSource(); s3.buffer = bufA; s3.start(start1 + d1 + d2, bufA.duration - d3, d3); s3.connect(ctx.destination);
 }
 
-/** 4) Riser Noise — filtered noise build across the fade window */
 export function applyRiserNoise(
   ctx: OfflineAudioContext,
   fadeStart: number,
@@ -145,7 +132,6 @@ export function applyRiserNoise(
   src.stop(fadeStart + fadeDur + 0.1);
 }
 
-/** 5) Sidechain Pump — duck A on every beat so B pops through */
 export function applySidechainPump(
   ctx: OfflineAudioContext,
   gainNodeA: GainNode,
@@ -167,14 +153,12 @@ export function applySidechainPump(
   }
 }
 
-/** 6) Stereo Widener — auto-pan widening for B during fade-in */
 export function applyStereoWidener(
   ctx: OfflineAudioContext,
   nodeB: AudioNode,
   fadeStart: number,
   fadeDur: number
 ) {
-  // extend OfflineAudioContext to include createStereoPanner if present
   const stereoCtx = ctx as OfflineAudioContext & {
     createStereoPanner?: () => StereoPannerNode;
   };
@@ -189,4 +173,62 @@ export function applyStereoWidener(
 
   nodeB.disconnect();
   nodeB.connect(panner).connect(ctx.destination);
+}
+
+/* =======================================================
+   STRATEGY LAYER
+======================================================= */
+
+export interface TransitionParams {
+  ctx: OfflineAudioContext;
+  bufA: AudioBuffer;
+  bufB: AudioBuffer;
+  anaA: AnalysisResult;
+  anaB: AnalysisResult;
+  spliceCenter: number;
+  crossfadeSec: number;
+  blend: Blend;
+}
+
+/** Default pro crossfade */
+export function basicCrossfade(params: TransitionParams) {
+  const { ctx, bufA, bufB, spliceCenter, crossfadeSec, blend } = params;
+
+  const srcA = ctx.createBufferSource(); srcA.buffer = bufA;
+  const srcB = ctx.createBufferSource(); srcB.buffer = bufB;
+  const gA = ctx.createGain(); gA.gain.setValueAtTime(1, 0);
+  const gB = ctx.createGain(); gB.gain.setValueAtTime(0, 0);
+
+  srcA.connect(gA).connect(ctx.destination);
+  srcB.connect(gB).connect(ctx.destination);
+
+  const fadeStart = spliceCenter - crossfadeSec / 2;
+  const offsetA = Math.max(30, bufA.duration - (spliceCenter + crossfadeSec));
+
+  srcA.start(0, offsetA);
+  srcB.start(fadeStart, 0);
+
+  applyBlend(gA.gain, gB.gain, fadeStart, crossfadeSec, blend);
+}
+
+/** BeatDrop: align B’s strongest drop at spliceCenter */
+export function beatDropTransition(params: TransitionParams) {
+  const { ctx, bufA, bufB, anaB, spliceCenter, crossfadeSec, blend } = params;
+
+  const srcA = ctx.createBufferSource(); srcA.buffer = bufA;
+  const srcB = ctx.createBufferSource(); srcB.buffer = bufB;
+  const gA = ctx.createGain(); gA.gain.setValueAtTime(1, 0);
+  const gB = ctx.createGain(); gB.gain.setValueAtTime(0, 0);
+
+  srcA.connect(gA).connect(ctx.destination);
+  srcB.connect(gB).connect(ctx.destination);
+
+  const dropB = findPrimaryDrop(anaB);
+  const whenB = Math.max(0, spliceCenter - dropB);
+
+  const offsetA = Math.max(30, bufA.duration - spliceCenter);
+  srcA.start(0, offsetA);
+  srcB.start(whenB, 0);
+
+  applyBlend(gA.gain, gB.gain, spliceCenter - crossfadeSec / 2, crossfadeSec, blend);
 }
