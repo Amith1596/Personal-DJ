@@ -1,6 +1,6 @@
 import { analyzeTrack } from "./analysis/analyzeTrack";
 import { basicCrossfade, beatDropTransition, TransitionParams } from "./mix/transitions";
-import { applyBlend, Blend } from "./mix/blends";
+import { Blend } from "./mix/blends";
 
 export type Vibe =
   | "dreamy" | "chaotic" | "echoTag" | "tapeStop" | "beatRoll"

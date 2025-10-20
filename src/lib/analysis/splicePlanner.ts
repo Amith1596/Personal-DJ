@@ -45,9 +45,9 @@ export function planSplice(
 
   // -------- 0) Defensive defaults --------
   const safeBpmA = Number.isFinite(bpmA) && bpmA > 0 ? bpmA : 120;
-  const safeBpmB = Number.isFinite(bpmB) && bpmB > 0 ? bpmB : 120;
+  const _safeBpmB = Number.isFinite(bpmB) && bpmB > 0 ? bpmB : 120; // TODO: used in tempo normalization
   const secPerBeatA = 60 / safeBpmA;
-  const secPerBeatB = 60 / safeBpmB;
+  // const secPerBeatB = 60 / safeBpmB;
 
   // Empty-beat protection
   const beatsAsec = (beatsA && beatsA.length ? beatsA : [0, durationA]).slice();

@@ -8,6 +8,12 @@ importers:
 
   .:
     dependencies:
+      essentia.js:
+        specifier: ^0.1.3
+        version: 0.1.3
+      idb-keyval:
+        specifier: ^6.2.2
+        version: 6.2.2
       meyda:
         specifier: ^5.6.3
         version: 5.6.3(rollup@2.79.2)
@@ -1873,6 +1879,9 @@ packages:
     resolution: {integrity: sha512-KmfKL3b6G+RXvP8N1vr3Tq1kL/oCFgn2NYXEtqP8/L3pKapUA4G8cFVaoF3SU323CD4XypR/ffioHmkti6/Tag==}
     engines: {node: '>=4.0'}
 
+  essentia.js@0.1.3:
+    resolution: {integrity: sha512-vVEPgeVMEBLRXbM5o5H5Rgu53EPHu25vyFKYg+flWLzI/nEoegJQez9FKRv8GR/KxIBwm+fXDEFL+MkQeoHaLw==}
+
   estraverse@4.3.0:
     resolution: {integrity: sha512-39nnKffWz8xN1BU/2c79n9nB9HDzo0niYUqx6xyqUnyoAnQyyWpOTdZEeiCch8BBu515t4wp9ZmgVfVhn9EBpw==}
     engines: {node: '>=4.0'}
@@ -2079,6 +2088,9 @@ packages:
   hasown@2.0.2:
     resolution: {integrity: sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ==}
     engines: {node: '>= 0.4'}
+
+  idb-keyval@6.2.2:
+    resolution: {integrity: sha512-yjD9nARJ/jb1g+CvD0tlhUHOrJ9Sy0P8T9MF3YaLlHnSRpwPfpTX0XIvpmw3gAJUmEu3FiICLBDPXVwyEvrleg==}
 
   idb@7.1.1:
     resolution: {integrity: sha512-gchesWBzyvGHRO9W8tzUWFDycow5gwjvFKfyV9FF32Y7F50yZMp7mP+T2mJIWFx49zicqyC4uefHM17o6xKIVQ==}
@@ -2566,6 +2578,10 @@ packages:
 
   node-releases@2.0.19:
     resolution: {integrity: sha512-xxOWJsBKtzAq7DY0J+DTzuz58K8e7sJbdgwkbMWQe8UYB6ekmsQ45q0M/tJDsGaZmbC+l7n57UV8Hl5tHxO9uw==}
+
+  node-wav@0.0.2:
+    resolution: {integrity: sha512-M6Rm/bbG6De/gKGxOpeOobx/dnGuP0dz40adqx38boqHhlWssBJZgLCPBNtb9NkrmnKYiV04xELq+R6PFOnoLA==}
+    engines: {node: '>=4.4.0'}
 
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
@@ -5462,6 +5478,10 @@ snapshots:
     dependencies:
       estraverse: 5.3.0
 
+  essentia.js@0.1.3:
+    dependencies:
+      node-wav: 0.0.2
+
   estraverse@4.3.0: {}
 
   estraverse@5.3.0: {}
@@ -5681,6 +5701,8 @@ snapshots:
   hasown@2.0.2:
     dependencies:
       function-bind: 1.1.2
+
+  idb-keyval@6.2.2: {}
 
   idb@7.1.1: {}
 
@@ -6132,6 +6154,8 @@ snapshots:
   node-getopt@0.3.2: {}
 
   node-releases@2.0.19: {}
+
+  node-wav@0.0.2: {}
 
   object-assign@4.1.1: {}
 
