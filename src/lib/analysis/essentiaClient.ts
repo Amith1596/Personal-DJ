@@ -1,201 +1,138 @@
-/**
- * Essentia.js WASM client with lazy loading
- * Provides audio analysis capabilities: BPM, beats, key, chroma, onsets, RMS
- */
+// src/lib/analysis/essentiaClient.ts
+// Lightweight, on-device analysis (no WASM): BPM via autocorrelation of onset envelope,
+// beat grid from BPM, simple energy (RMS), naive key stub (we'll swap for Essentia.js later).
 
-import { get, set } from 'idb-keyval';
+export type KeyScale = "major" | "minor";
 
-// Types for Essentia analysis results
 export interface EssentiaAnalysisResult {
   bpm: number;
-  beats: number[];
-  key: {
-    tonic: string;
-    scale: string;
-    confidence: number;
-  };
-  chromaFrames: Float32Array;
-  onsets: number[];
-  rms: Float32Array;
   sampleRate: number;
+  beats: number[];       // seconds
+  onsets: number[];      // seconds (local maxima in onset envelope)
+  rms: number[];         // per-frame RMS (hop-based)
+  frameHopSec: number;   // seconds per hop
+  key: { tonic: string; scale: KeyScale; confidence: number };
 }
 
-// Singleton instance
-let essentiaInstance: unknown = null;
-let isLoading = false;
-let loadPromise: Promise<unknown> | null = null;
+type LoadingStatus = { isLoaded: boolean; isLoading: boolean; error?: string };
 
-/**
- * Lazy-load Essentia.js WASM module
- * Uses IndexedDB cache to avoid re-downloading WASM files
- */
-async function loadEssentia(): Promise<unknown> {
-  if (essentiaInstance) {
-    return essentiaInstance;
-  }
+let loaded = false;
+let loading = false;
+let lastError: string | undefined;
 
-  if (isLoading && loadPromise) {
-    return loadPromise;
-  }
-
-  isLoading = true;
-  loadPromise = (async () => {
-    try {
-      // Check cache first
-      const cached = await get('essentia-wasm-cache');
-      if (cached && cached.timestamp > Date.now() - 24 * 60 * 60 * 1000) { // 24h cache
-        console.log('📦 Using cached Essentia.js WASM');
-        return cached.essentia;
-      }
-
-      console.log('🔄 Loading Essentia.js WASM...');
-      
-      // Dynamic import with lazy loading
-      const EssentiaWASM = await import('essentia.js') as { Essentia: unknown; EssentiaWASM: unknown };
-      
-      // Initialize Essentia with WASM
-      const EssentiaClass = EssentiaWASM.Essentia as new (wasm: unknown, debug?: boolean) => unknown;
-      const essentia = new EssentiaClass(EssentiaWASM.EssentiaWASM, false);
-      
-      // Cache the instance
-      await set('essentia-wasm-cache', {
-        essentia,
-        timestamp: Date.now()
-      });
-      
-      console.log('✅ Essentia.js WASM loaded successfully');
-      return essentia;
-    } catch (error: unknown) {
-      console.error('❌ Failed to load Essentia.js:', error);
-      throw new Error(`Essentia.js loading failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      isLoading = false;
-    }
-  })();
-
-  essentiaInstance = await loadPromise;
-  return essentiaInstance;
+export function getEssentiaLoadingStatus(): LoadingStatus {
+  return { isLoaded: loaded, isLoading: loading, error: lastError };
 }
 
-/**
- * Analyze an AudioBuffer using Essentia.js
- * Returns comprehensive analysis including BPM, beats, key, chroma, onsets, RMS
- */
-export async function analyzeBuffer(audioBuffer: AudioBuffer): Promise<EssentiaAnalysisResult> {
-  const essentia = await loadEssentia();
-  
-  // Convert to mono for analysis
-  const monoData = new Float32Array(audioBuffer.length);
-  for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
-    const channelData = audioBuffer.getChannelData(ch);
-    for (let i = 0; i < channelData.length; i++) {
-      monoData[i] += channelData[i] / audioBuffer.numberOfChannels;
-    }
-  }
-
-  const sampleRate = audioBuffer.sampleRate;
-  
+export async function loadEssentia(): Promise<void> {
+  if (loaded || loading) return;
   try {
-    // Cast essentia to any for method calls (we know the interface from our type declaration)
-    const essentiaAny = essentia as Record<string, (data: Float32Array, sampleRate: number) => Record<string, unknown>>;
-    
-    // 1. BPM Detection using RhythmExtractor
-    const rhythmResult = essentiaAny.RhythmExtractor(monoData, sampleRate);
-    const bpm = Math.round((rhythmResult.bpm as number) || 120);
-    
-    // 2. Beat tracking
-    const beatTrackerResult = essentiaAny.BeatTrackerMultiFeature(monoData, sampleRate);
-    const beats = Array.from((beatTrackerResult.ticks as number[]) || []);
-    
-    // 3. Key detection using KeyExtractor (if available) or HPCP + heuristic
-    let keyResult: { tonic: string; scale: string; confidence: number };
-    try {
-      const keyExtractorResult = essentiaAny.KeyExtractor(monoData, sampleRate);
-      keyResult = {
-        tonic: (keyExtractorResult.key as string) || 'C',
-        scale: (keyExtractorResult.scale as string) || 'major',
-        confidence: (keyExtractorResult.strength as number) || 0.5
-      };
-    } catch {
-      // Fallback: Use HPCP + simple heuristic
-      console.warn('KeyExtractor not available, using HPCP fallback');
-      const hpcpResult = essentiaAny.HPCP(monoData, sampleRate);
-      keyResult = estimateKeyFromHPCP(hpcpResult.hpcp as Float32Array);
-    }
-    
-    // 4. Chroma features (HPCP)
-    const hpcpResult = essentiaAny.HPCP(monoData, sampleRate);
-    const chromaFrames = new Float32Array(hpcpResult.hpcp as Float32Array);
-    
-    // 5. Onset detection
-    const onsetResult = essentiaAny.OnsetRate(monoData, sampleRate);
-    const onsets = Array.from((onsetResult.onsets as number[]) || []);
-    
-    // 6. RMS energy
-    const rmsResult = essentiaAny.RMS(monoData, sampleRate);
-    const rms = new Float32Array(rmsResult.rms as Float32Array);
-    
-    return {
-      bpm,
-      beats,
-      key: keyResult,
-      chromaFrames,
-      onsets,
-      rms,
-      sampleRate
-    };
-    
-  } catch (error: unknown) {
-    console.error('Essentia analysis failed:', error);
-    throw new Error(`Audio analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    loading = true;
+    await new Promise((r) => setTimeout(r, 5)); // placeholder for WASM init later
+    loaded = true;
+    lastError = undefined;
+  } catch (e) {
+    lastError = e instanceof Error ? e.message : "Unknown error";
+    loaded = false;
+  } finally {
+    loading = false;
   }
 }
 
-/**
- * Simple key estimation from HPCP using circle of fifths
- * This is a fallback when KeyExtractor is not available
- */
-function estimateKeyFromHPCP(hpcp: Float32Array): { tonic: string; scale: string; confidence: number } {
-  // Simple heuristic: find the strongest HPCP bin
-  let maxBin = 0;
-  let maxValue = 0;
-  
-  for (let i = 0; i < hpcp.length; i++) {
-    if (hpcp[i] > maxValue) {
-      maxValue = hpcp[i];
-      maxBin = i;
+export async function analyzeBuffer(audioBuffer: AudioBuffer): Promise<EssentiaAnalysisResult> {
+  await loadEssentia();
+
+  const sr = audioBuffer.sampleRate;
+  const ch = audioBuffer.getChannelData(0); // mono for analysis
+  // analysis params (responsive on phones)
+  const frameSize = 2048;
+  const hopSize = 512;
+  const hopSec = hopSize / sr;
+
+  // --- RMS per frame ---
+  const numFrames = Math.max(1, Math.floor((ch.length - frameSize) / hopSize));
+  const rms = new Array<number>(numFrames);
+  for (let i = 0; i < numFrames; i++) {
+    const start = i * hopSize;
+    let sum = 0;
+    for (let j = 0; j < frameSize; j++) {
+      const v = ch[start + j] || 0;
+      sum += v * v;
+    }
+    rms[i] = Math.sqrt(sum / frameSize);
+  }
+
+  // --- Onset envelope (half-wave rectified RMS diff) ---
+  const onsetEnv = new Array<number>(numFrames);
+  onsetEnv[0] = 0;
+  for (let i = 1; i < numFrames; i++) {
+    const d = rms[i] - rms[i - 1];
+    onsetEnv[i] = d > 0 ? d : 0;
+  }
+
+  // normalize envelope
+  let maxEnv = 1e-9;
+  for (let i = 0; i < numFrames; i++) if (onsetEnv[i] > maxEnv) maxEnv = onsetEnv[i];
+  if (maxEnv > 0) for (let i = 0; i < numFrames; i++) onsetEnv[i] /= maxEnv;
+
+  // --- BPM via autocorrelation of onset envelope ---
+  // Search 60–180 BPM
+  const minBPM = 60, maxBPM = 180;
+  const minLag = Math.floor((60 / maxBPM) / hopSec);
+  const maxLag = Math.floor((60 / minBPM) / hopSec);
+  let bestLag = minLag, bestVal = -Infinity;
+  // mean-center
+  let mean = 0; for (let i = 0; i < numFrames; i++) mean += onsetEnv[i]; mean /= numFrames;
+  const envZ = onsetEnv.map(v => v - mean);
+
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let acc = 0;
+    for (let i = lag; i < numFrames; i++) acc += envZ[i] * envZ[i - lag];
+    if (acc > bestVal) { bestVal = acc; bestLag = lag; }
+  }
+  const bpm = Math.max(60, Math.min(180, 60 / (bestLag * hopSec)));
+
+  // --- Beat grid from BPM ---
+  const beatSec = 60 / bpm;
+  // seed: first strong onset in first few seconds, else time 0
+  let seed = 0;
+  {
+    const windowFrames = Math.min(numFrames, Math.floor(5 / hopSec));
+    let bestI = -1, bestE = 0;
+    for (let i = 1; i < windowFrames - 1; i++) {
+      if (onsetEnv[i] > onsetEnv[i - 1] && onsetEnv[i] > onsetEnv[i + 1] && onsetEnv[i] > 0.3) {
+        if (onsetEnv[i] > bestE) { bestE = onsetEnv[i]; bestI = i; }
+      }
+    }
+    if (bestI >= 0) seed = bestI * hopSec;
+  }
+
+  const beats: number[] = [];
+  const dur = audioBuffer.duration;
+  // extend backward a couple beats so we don't always start late
+  let t = seed;
+  while (t - beatSec > 0) t -= beatSec;
+  // forward beats
+  for (; t < dur; t += beatSec) beats.push(t);
+
+  // --- Onset times (peaks) ---
+  const onsets: number[] = [];
+  for (let i = 1; i < numFrames - 1; i++) {
+    if (onsetEnv[i] > 0.15 && onsetEnv[i] > onsetEnv[i - 1] && onsetEnv[i] > onsetEnv[i + 1]) {
+      onsets.push(i * hopSec);
     }
   }
-  
-  // Map HPCP bin to key (simplified)
-  const keys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const tonic = keys[maxBin % 12];
-  
-  // TODO: Implement proper scale detection from HPCP
-  // For now, default to major
-  return {
-    tonic,
-    scale: 'major',
-    confidence: Math.min(maxValue, 1.0)
-  };
-}
 
-/**
- * Get loading status for UI feedback
- */
-export function getEssentiaLoadingStatus(): { isLoading: boolean; isLoaded: boolean } {
-  return {
-    isLoading,
-    isLoaded: !!essentiaInstance
-  };
-}
+  // --- Key (stub) ---
+  const key = { tonic: "C", scale: "major" as KeyScale, confidence: 0 };
 
-/**
- * Clear Essentia cache (useful for development)
- */
-export async function clearEssentiaCache(): Promise<void> {
-  await set('essentia-wasm-cache', null);
-  essentiaInstance = null;
-  isLoading = false;
-  loadPromise = null;
+  return {
+    bpm,
+    sampleRate: sr,
+    beats,
+    onsets,
+    rms,
+    frameHopSec: hopSec,
+    key,
+  };
 }

@@ -1,194 +1,117 @@
-/**
- * Candidate generation for splice point selection
- * Implements the algorithm from ALGORITHM_CORE.md
- */
+// src/lib/analysis/candidates.ts
+import type { EssentiaAnalysisResult } from "./essentiaClient";
 
-import { EssentiaAnalysisResult } from './essentiaClient';
+export type TimeRange = { startSec: number; endSec: number };
+
+export function getDefaultRanges(a: EssentiaAnalysisResult, b: EssentiaAnalysisResult) {
+  // Default: last ~8s of A and first ~8s of B — but the *splice points* will be found
+  // INSIDE these windows using beats & onsets (not just end->start).
+  const tail = Math.min(8, Math.max(4, (60 / Math.max(60, Math.min(200, a.bpm))) * 8));
+  const head = Math.min(8, Math.max(4, (60 / Math.max(60, Math.min(200, b.bpm))) * 8));
+
+  return {
+    rangeA: { startSec: Math.max(0, (a.beats[a.beats.length - 1] ?? a.sampleRate) - tail), endSec: (a.beats[a.beats.length - 1] ?? a.sampleRate) },
+    rangeB: { startSec: 0, endSec: head },
+  };
+}
 
 export interface Candidate {
-  tA: number; // Time in track A (seconds)
-  tB: number; // Time in track B (seconds)
+  tA: number;
+  tB: number;
   isDownbeatA: boolean;
   isDownbeatB: boolean;
   isStrongOnsetA: boolean;
   isStrongOnsetB: boolean;
 }
 
-export interface CandidateGenerationParams {
+function markDownbeats(beats: number[]): boolean[] {
+  // Approx: every 4 beats is a downbeat.
+  const flags: boolean[] = beats.map((_, i) => i % 4 === 0);
+  return flags;
+}
+
+function isStrongOnset(onsets: number[], t: number, tol = 0.06): boolean {
+  // Any onset within ±tol seconds
+  for (let i = 0; i < onsets.length; i++) {
+    if (Math.abs(onsets[i] - t) <= tol) return true;
+  }
+  return false;
+}
+
+export function generateCandidates(opts: {
   analysisA: EssentiaAnalysisResult;
   analysisB: EssentiaAnalysisResult;
-  rangeA: [number, number]; // [a1, a2] in seconds
-  rangeB: [number, number]; // [b1, b2] in seconds
-  crossfadeMs: number; // Minimum crossfade duration
+  rangeA: TimeRange;
+  rangeB: TimeRange;
+  crossfadeMs: number;
   sampleRate: number;
-}
+}): Candidate[] {
+  const { analysisA: A, analysisB: B, rangeA, rangeB } = opts;
+  const beatsA = A.beats.filter(t => t >= rangeA.startSec && t <= rangeA.endSec);
+  const beatsB = B.beats.filter(t => t >= rangeB.startSec && t <= rangeB.endSec);
 
-/**
- * Generate candidate splice points within the specified ranges
- * Prioritizes downbeats, then strong onsets near downbeats
- */
-export function generateCandidates(params: CandidateGenerationParams): Candidate[] {
-  const { analysisA, analysisB, rangeA, rangeB, crossfadeMs } = params;
-  
-  const candidates: Candidate[] = [];
-  const xfSec = crossfadeMs / 1000;
-  
-  // 1. Find downbeats within ranges
-  const downbeatsA = findDownbeatsInRange(analysisA.beats, rangeA, analysisA.sampleRate);
-  const downbeatsB = findDownbeatsInRange(analysisB.beats, rangeB, analysisB.sampleRate);
-  
-  // 2. Find strong onsets within ranges
-  const strongOnsetsA = findStrongOnsetsInRange(analysisA.onsets, rangeA, analysisA.sampleRate);
-  const strongOnsetsB = findStrongOnsetsInRange(analysisB.onsets, rangeB, analysisB.sampleRate);
-  
-  // 3. Generate downbeat-to-downbeat candidates
-  for (const tA of downbeatsA) {
-    for (const tB of downbeatsB) {
-      if (isValidCandidate(tA, tB, rangeA, rangeB, xfSec)) {
-        candidates.push({
-          tA,
-          tB,
-          isDownbeatA: true,
-          isDownbeatB: true,
-          isStrongOnsetA: strongOnsetsA.includes(tA),
-          isStrongOnsetB: strongOnsetsB.includes(tB)
-        });
-      }
+  const dba = markDownbeats(beatsA);
+  const dbb = markDownbeats(beatsB);
+
+  const cand: Candidate[] = [];
+
+  // Prefer downbeat↔downbeat pairs
+  for (let i = 0; i < beatsA.length; i++) {
+    if (!dba[i]) continue;
+    for (let j = 0; j < beatsB.length; j++) {
+      if (!dbb[j]) continue;
+      cand.push({
+        tA: beatsA[i],
+        tB: beatsB[j],
+        isDownbeatA: true,
+        isDownbeatB: true,
+        isStrongOnsetA: isStrongOnset(A.onsets, beatsA[i]),
+        isStrongOnsetB: isStrongOnset(B.onsets, beatsB[j]),
+      });
     }
   }
-  
-  // 4. Generate downbeat-to-strong-onset candidates
-  for (const tA of downbeatsA) {
-    for (const tB of strongOnsetsB) {
-      if (isValidCandidate(tA, tB, rangeA, rangeB, xfSec)) {
-        candidates.push({
-          tA,
-          tB,
-          isDownbeatA: true,
-          isDownbeatB: false,
-          isStrongOnsetA: strongOnsetsA.includes(tA),
-          isStrongOnsetB: true
-        });
-      }
-    }
-  }
-  
-  // 5. Generate strong-onset-to-downbeat candidates
-  for (const tA of strongOnsetsA) {
-    for (const tB of downbeatsB) {
-      if (isValidCandidate(tA, tB, rangeA, rangeB, xfSec)) {
-        candidates.push({
-          tA,
-          tB,
+
+  // If too sparse, add strong-onset pairs (align strong to strong)
+  if (cand.length < 8) {
+    const onsetA = A.onsets.filter(t => t >= rangeA.startSec && t <= rangeA.endSec);
+    const onsetB = B.onsets.filter(t => t >= rangeB.startSec && t <= rangeB.endSec);
+    for (const ta of onsetA) {
+      for (const tb of onsetB) {
+        cand.push({
+          tA: ta,
+          tB: tb,
           isDownbeatA: false,
-          isDownbeatB: true,
+          isDownbeatB: false,
           isStrongOnsetA: true,
-          isStrongOnsetB: strongOnsetsB.includes(tB)
+          isStrongOnsetB: true,
         });
       }
     }
   }
-  
-  // 6. If sparse, add strong-onset-to-strong-onset candidates
-  if (candidates.length < 10) {
-    for (const tA of strongOnsetsA) {
-      for (const tB of strongOnsetsB) {
-        if (isValidCandidate(tA, tB, rangeA, rangeB, xfSec)) {
-          candidates.push({
-            tA,
-            tB,
-            isDownbeatA: false,
-            isDownbeatB: false,
-            isStrongOnsetA: true,
-            isStrongOnsetB: true
-          });
-        }
+
+  // Also sprinkle beat↔beat (non-downbeat) if still few
+  if (cand.length < 16) {
+    for (const ta of beatsA) {
+      for (const tb of beatsB) {
+        cand.push({
+          tA: ta,
+          tB: tb,
+          isDownbeatA: false,
+          isDownbeatB: false,
+          isStrongOnsetA: isStrongOnset(A.onsets, ta),
+          isStrongOnsetB: isStrongOnset(B.onsets, tb),
+        });
       }
     }
   }
-  
-  // 7. Sort by musical priority (downbeats first, then onsets)
-  candidates.sort((a, b) => {
-    const scoreA = (a.isDownbeatA ? 2 : 0) + (a.isDownbeatB ? 2 : 0) + 
-                   (a.isStrongOnsetA ? 1 : 0) + (a.isStrongOnsetB ? 1 : 0);
-    const scoreB = (b.isDownbeatA ? 2 : 0) + (b.isDownbeatB ? 2 : 0) + 
-                   (b.isStrongOnsetA ? 1 : 0) + (b.isStrongOnsetB ? 1 : 0);
-    return scoreB - scoreA;
-  });
-  
-  return candidates;
-}
 
-/**
- * Find downbeats within the specified time range
- * Assumes beats array contains beat times in samples
- */
-function findDownbeatsInRange(beats: number[], range: [number, number], sampleRate: number): number[] {
-  const [startSec, endSec] = range;
-  const startSample = startSec * sampleRate;
-  const endSample = endSec * sampleRate;
-  
-  return beats
-    .filter(beat => beat >= startSample && beat <= endSample)
-    .map(beat => beat / sampleRate);
-}
-
-/**
- * Find strong onsets within the specified time range
- * Uses a threshold to identify "strong" onsets
- */
-function findStrongOnsetsInRange(onsets: number[], range: [number, number], sampleRate: number): number[] {
-  const [startSec, endSec] = range;
-  const startSample = startSec * sampleRate;
-  const endSample = endSec * sampleRate;
-  
-  return onsets
-    .filter(onset => onset >= startSample && onset <= endSample)
-    .map(onset => onset / sampleRate);
-}
-
-/**
- * Check if a candidate is valid (within safe crossfade window)
- */
-function isValidCandidate(
-  tA: number, 
-  tB: number, 
-  rangeA: [number, number], 
-  rangeB: [number, number], 
-  xfSec: number
-): boolean {
-  const [a1, a2] = rangeA;
-  const [b1, b2] = rangeB;
-  
-  // Ensure both points are within their respective ranges
-  if (tA < a1 || tA > a2 || tB < b1 || tB > b2) {
-    return false;
+  // Deduplicate near-equal pairs and cap list
+  const uniq: Candidate[] = [];
+  const seen = new Set<string>();
+  for (const c of cand) {
+    const k = `${Math.round(c.tA * 100)}-${Math.round(c.tB * 100)}`;
+    if (!seen.has(k)) { seen.add(k); uniq.push(c); }
+    if (uniq.length >= 100) break;
   }
-  
-  // Ensure there's enough room for crossfade
-  // Track A needs xfSec seconds before the end
-  // Track B needs xfSec seconds after the start
-  const remainingA = a2 - tA;
-  const remainingB = tB - b1;
-  
-  return remainingA >= xfSec && remainingB >= xfSec;
-}
-
-/**
- * Get default ranges for full track analysis
- * Uses the last 30 seconds of track A and first 30 seconds of track B
- */
-export function getDefaultRanges(
-  analysisA: EssentiaAnalysisResult, 
-  analysisB: EssentiaAnalysisResult
-): { rangeA: [number, number]; rangeB: [number, number] } {
-  const durationA = analysisA.beats.length > 0 ? 
-    Math.max(...analysisA.beats) / analysisA.sampleRate : 30;
-  const durationB = analysisB.beats.length > 0 ? 
-    Math.max(...analysisB.beats) / analysisB.sampleRate : 30;
-  
-  const rangeA: [number, number] = [Math.max(0, durationA - 30), durationA];
-  const rangeB: [number, number] = [0, Math.min(30, durationB)];
-  
-  return { rangeA, rangeB };
+  return uniq;
 }
