@@ -69,8 +69,8 @@ export async function renderTwoBarPreview(
   sB.connect(gB);
 
   // --- Optional effect chains per recipe
-  // We’ll end with: outA.connect(master), outB.connect(master)
-  let outA: AudioNode = gA;
+  // We'll end with: outA.connect(master), outB.connect(master)
+  const outA: AudioNode = gA;
   let outB: AudioNode = gB;
 
   const want3Band = recipe === "proEqBlend" || recipe === "dreamy";

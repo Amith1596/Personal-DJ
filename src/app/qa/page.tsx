@@ -23,7 +23,6 @@ export default function QAPage() {
   const [analysisB, setAnalysisB] = useState<EssentiaAnalysisResult | null>(null);
   const [candidates, setCandidates] = useState<ScoredCandidate[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<ScoredCandidate | null>(null);
-  const [autoBpm, setAutoBpm] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [essentiaStatus, setEssentiaStatus] = useState(getEssentiaLoadingStatus());
   const [audioReady, setAudioReady] = useState(false);
@@ -48,7 +47,7 @@ export default function QAPage() {
       await ctx.close();
 
       const analysis = await analyzeBuffer(audioBuffer);
-      if (track === "A") { setAnalysisA(analysis); if (autoBpm) setBpm(analysis.bpm); }
+      if (track === "A") { setAnalysisA(analysis); }
       else { setAnalysisB(analysis); }
       setStatus(`Track ${track} analyzed: ${analysis.bpm.toFixed(2)} BPM`);
     } catch (err) {
@@ -56,7 +55,7 @@ export default function QAPage() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [autoBpm]);
+  }, []);
 
   useEffect(() => { if (fileA) void analyzeFile(fileA, "A"); }, [fileA, analyzeFile]);
   useEffect(() => { if (fileB) void analyzeFile(fileB, "B"); }, [fileB, analyzeFile]);
@@ -91,7 +90,7 @@ export default function QAPage() {
     const ratio = (beatmatch && analysisA && analysisB) ? (analysisA.bpm > 0 ? analysisB.bpm / analysisA.bpm : 1) : undefined;
 
     const { wav, metrics } = await renderTwoBarPreview(
-      fileA, fileB, bpm, bars, xf, recipeToUse as any,
+      fileA, fileB, bpm, bars, xf, recipeToUse,
       candidate.tA, candidate.tB,
       ratio
     );
