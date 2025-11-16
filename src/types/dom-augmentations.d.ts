@@ -3,7 +3,10 @@ export {};
 
 declare global {
   interface Window {
-    // Old Safari prefix; matches the standard constructor type.
     webkitAudioContext?: typeof AudioContext;
+
+    // Essentia slots — typed as unknown so we don't use `any`
+    Essentia?: unknown;
+    EssentiaWASM?: unknown;
   }
 }

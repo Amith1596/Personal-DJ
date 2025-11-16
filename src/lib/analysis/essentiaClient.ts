@@ -1,138 +1,261 @@
 // src/lib/analysis/essentiaClient.ts
-// Lightweight, on-device analysis (no WASM): BPM via autocorrelation of onset envelope,
-// beat grid from BPM, simple energy (RMS), naive key stub (we'll swap for Essentia.js later).
+// Essentia.js (WASM) loader via CDN (<script>) with a typed, safe fallback analyzer.
 
 export type KeyScale = "major" | "minor";
-
 export interface EssentiaAnalysisResult {
   bpm: number;
   sampleRate: number;
-  beats: number[];       // seconds
-  onsets: number[];      // seconds (local maxima in onset envelope)
-  rms: number[];         // per-frame RMS (hop-based)
-  frameHopSec: number;   // seconds per hop
+  beats: number[];
+  onsets: number[];
+  rms: number[];
+  frameHopSec: number;
   key: { tonic: string; scale: KeyScale; confidence: number };
 }
 
-type LoadingStatus = { isLoaded: boolean; isLoading: boolean; error?: string };
+type LoadingStatus = {
+  isLoaded: boolean;
+  isLoading: boolean;
+  error?: string;
+  backend: "essentia" | "fallback" | null;
+};
 
 let loaded = false;
 let loading = false;
 let lastError: string | undefined;
+let backend: LoadingStatus["backend"] = null;
 
 export function getEssentiaLoadingStatus(): LoadingStatus {
-  return { isLoaded: loaded, isLoading: loading, error: lastError };
+  return { isLoaded: loaded, isLoading: loading, error: lastError, backend };
 }
+
+/* -------------------- Essentia globals (typed) -------------------- */
+
+interface RhythmOut { bpm?: number; tempo?: number }
+interface OnsetOut { onsets?: number[]; onsetTimes?: number[] }
+interface KeyOut { key?: string; scale?: string; strength?: number }
+
+// What methods we *use* from the Essentia wrapper:
+interface EssentiaCore {
+  RhythmExtractor2013?: (mono: Float32Array, sr: number) => RhythmOut;
+  OnsetDetectionGlobal?: (mono: Float32Array, sr: number) => OnsetOut;
+  KeyExtractor?: (mono: Float32Array, sr: number) => KeyOut;
+}
+
+// Global constructors/shims provided by the CDN scripts
+type EssentiaCtor = new (module: unknown) => EssentiaCore;
+type EssentiaWASMFactory = () => Promise<unknown>;
+
+function getEssentiaFromWindow(): {
+  Essentia?: EssentiaCtor;
+  EssentiaWASM?: EssentiaWASMFactory;
+} {
+  const w = window as unknown as {
+    Essentia?: unknown;
+    EssentiaWASM?: unknown;
+  };
+  const Essentia = (typeof w.Essentia === "function") ? (w.Essentia as EssentiaCtor) : undefined;
+  const EssentiaWASM = (typeof w.EssentiaWASM === "function") ? (w.EssentiaWASM as EssentiaWASMFactory) : undefined;
+  return { Essentia, EssentiaWASM };
+}
+
+/* -------------------- Loader -------------------- */
 
 export async function loadEssentia(): Promise<void> {
   if (loaded || loading) return;
+  loading = true;
+  lastError = undefined;
+  backend = null;
+
   try {
-    loading = true;
-    await new Promise((r) => setTimeout(r, 5)); // placeholder for WASM init later
+    const ok = await tryLoadEssentiaFromCDN();
+    backend = ok ? "essentia" : "fallback";
     loaded = true;
-    lastError = undefined;
-  } catch (e) {
-    lastError = e instanceof Error ? e.message : "Unknown error";
-    loaded = false;
+  } catch (err) {
+    backend = "fallback";
+    lastError = err instanceof Error ? err.message : String(err);
+    loaded = true; // still usable via fallback
   } finally {
     loading = false;
   }
 }
 
-export async function analyzeBuffer(audioBuffer: AudioBuffer): Promise<EssentiaAnalysisResult> {
-  await loadEssentia();
+async function tryLoadEssentiaFromCDN(): Promise<boolean> {
+  // Already present?
+  const g = getEssentiaFromWindow();
+  if (g.Essentia && g.EssentiaWASM) return true;
 
-  const sr = audioBuffer.sampleRate;
-  const ch = audioBuffer.getChannelData(0); // mono for analysis
-  // analysis params (responsive on phones)
-  const frameSize = 2048;
-  const hopSize = 512;
-  const hopSec = hopSize / sr;
-
-  // --- RMS per frame ---
-  const numFrames = Math.max(1, Math.floor((ch.length - frameSize) / hopSize));
-  const rms = new Array<number>(numFrames);
-  for (let i = 0; i < numFrames; i++) {
-    const start = i * hopSize;
-    let sum = 0;
-    for (let j = 0; j < frameSize; j++) {
-      const v = ch[start + j] || 0;
-      sum += v * v;
-    }
-    rms[i] = Math.sqrt(sum / frameSize);
+  try {
+    await injectScriptOnce(
+      "https://cdn.jsdelivr.net/npm/essentia.js/dist/essentia.js-core.js",
+      "essentia-core"
+    );
+    await injectScriptOnce(
+      "https://cdn.jsdelivr.net/npm/essentia.js/dist/essentia-wasm.web.js",
+      "essentia-wasm"
+    );
+  } catch {
+    return false;
   }
 
-  // --- Onset envelope (half-wave rectified RMS diff) ---
-  const onsetEnv = new Array<number>(numFrames);
+  const gg = getEssentiaFromWindow();
+  return !!(gg.Essentia && gg.EssentiaWASM);
+}
+
+function injectScriptOnce(src: string, id: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.getElementById(id)) return resolve();
+    const s = document.createElement("script");
+    s.id = id;
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(s);
+  });
+}
+
+/* -------------------- Public analysis API -------------------- */
+
+export async function analyzeBuffer(audioBuffer: AudioBuffer): Promise<EssentiaAnalysisResult> {
+  await loadEssentia();
+  if (backend === "essentia") {
+    try {
+      return await analyzeWithEssentia(audioBuffer);
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      // Fall through to fallback
+    }
+  }
+  return analyzeFallback(audioBuffer);
+}
+
+/* -------------------- Essentia-based analysis (guarded) -------------------- */
+
+async function analyzeWithEssentia(audioBuffer: AudioBuffer): Promise<EssentiaAnalysisResult> {
+  const { Essentia, EssentiaWASM } = getEssentiaFromWindow();
+  if (!Essentia || !EssentiaWASM) throw new Error("Essentia globals not available");
+
+  const wasmModule = await EssentiaWASM();
+  const core: EssentiaCore = new Essentia(wasmModule);
+
+  const sr = audioBuffer.sampleRate;
+
+  // Mono mixdown
+  const ch0 = audioBuffer.getChannelData(0);
+  let mono = ch0;
+  if (audioBuffer.numberOfChannels > 1) {
+    const ch1 = audioBuffer.getChannelData(1);
+    mono = new Float32Array(ch0.length);
+    for (let i = 0; i < ch0.length; i++) mono[i] = 0.5 * (ch0[i] + ch1[i]);
+  }
+
+  if (typeof core.RhythmExtractor2013 !== "function") {
+    throw new Error("RhythmExtractor2013 not exposed in this bundle");
+  }
+  const r = core.RhythmExtractor2013(mono, sr) as RhythmOut;
+  const bpm = (typeof r.bpm === "number" ? r.bpm : (typeof r.tempo === "number" ? r.tempo : 120));
+
+  // Beat grid
+  const beatSec = 60 / Math.max(1, bpm);
+  const beats: number[] = [];
+  for (let t = 0; t < audioBuffer.duration; t += beatSec) beats.push(t);
+
+  // Onsets (best-effort)
+  if (typeof core.OnsetDetectionGlobal !== "function") {
+    throw new Error("OnsetDetectionGlobal not exposed in this bundle");
+  }
+  const onsetOut = core.OnsetDetectionGlobal(mono, sr) as OnsetOut;
+  const onsets = (Array.isArray(onsetOut.onsets) ? onsetOut.onsets
+                  : Array.isArray(onsetOut.onsetTimes) ? onsetOut.onsetTimes
+                  : []) as number[];
+
+  // Key (optional)
+  let key = { tonic: "C", scale: "major" as KeyScale, confidence: 0 };
+  if (typeof core.KeyExtractor === "function") {
+    try {
+      const ko = core.KeyExtractor(mono, sr) as KeyOut;
+      key = {
+        tonic: typeof ko.key === "string" ? ko.key : "C",
+        scale: (typeof ko.scale === "string" && ko.scale.toLowerCase() === "minor") ? "minor" : "major",
+        confidence: typeof ko.strength === "number" ? ko.strength : 0,
+      };
+    } catch {
+      // keep default key
+    }
+  }
+
+  // Frame RMS to match fallback API
+  const { rms, hopSec } = computeFrameRMS(mono, sr);
+
+  return { bpm, sampleRate: sr, beats, onsets, rms, frameHopSec: hopSec, key };
+}
+
+/* -------------------- Lightweight fallback analyzer -------------------- */
+
+function analyzeFallback(audioBuffer: AudioBuffer): EssentiaAnalysisResult {
+  const sr = audioBuffer.sampleRate;
+  const ch0 = audioBuffer.getChannelData(0);
+
+  // Frame RMS
+  const { rms, hopSec } = computeFrameRMS(ch0, sr);
+
+  // Onset envelope
+  const onsetEnv = new Array<number>(rms.length);
   onsetEnv[0] = 0;
-  for (let i = 1; i < numFrames; i++) {
+  for (let i = 1; i < rms.length; i++) {
     const d = rms[i] - rms[i - 1];
     onsetEnv[i] = d > 0 ? d : 0;
   }
-
-  // normalize envelope
   let maxEnv = 1e-9;
-  for (let i = 0; i < numFrames; i++) if (onsetEnv[i] > maxEnv) maxEnv = onsetEnv[i];
-  if (maxEnv > 0) for (let i = 0; i < numFrames; i++) onsetEnv[i] /= maxEnv;
+  for (let i = 0; i < onsetEnv.length; i++) if (onsetEnv[i] > maxEnv) maxEnv = onsetEnv[i];
+  if (maxEnv > 0) for (let i = 0; i < onsetEnv.length; i++) onsetEnv[i] /= maxEnv;
 
-  // --- BPM via autocorrelation of onset envelope ---
-  // Search 60–180 BPM
-  const minBPM = 60, maxBPM = 180;
-  const minLag = Math.floor((60 / maxBPM) / hopSec);
-  const maxLag = Math.floor((60 / minBPM) / hopSec);
-  let bestLag = minLag, bestVal = -Infinity;
-  // mean-center
-  let mean = 0; for (let i = 0; i < numFrames; i++) mean += onsetEnv[i]; mean /= numFrames;
-  const envZ = onsetEnv.map(v => v - mean);
+  // BPM via autocorrelation (60..180 BPM)
+  const bpm = estimateBPMFromEnvelope(onsetEnv, hopSec, 60, 180);
 
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    let acc = 0;
-    for (let i = lag; i < numFrames; i++) acc += envZ[i] * envZ[i - lag];
-    if (acc > bestVal) { bestVal = acc; bestLag = lag; }
-  }
-  const bpm = Math.max(60, Math.min(180, 60 / (bestLag * hopSec)));
-
-  // --- Beat grid from BPM ---
+  // Beat grid
   const beatSec = 60 / bpm;
-  // seed: first strong onset in first few seconds, else time 0
-  let seed = 0;
-  {
-    const windowFrames = Math.min(numFrames, Math.floor(5 / hopSec));
-    let bestI = -1, bestE = 0;
-    for (let i = 1; i < windowFrames - 1; i++) {
-      if (onsetEnv[i] > onsetEnv[i - 1] && onsetEnv[i] > onsetEnv[i + 1] && onsetEnv[i] > 0.3) {
-        if (onsetEnv[i] > bestE) { bestE = onsetEnv[i]; bestI = i; }
-      }
-    }
-    if (bestI >= 0) seed = bestI * hopSec;
-  }
-
   const beats: number[] = [];
+  let t = 0;
   const dur = audioBuffer.duration;
-  // extend backward a couple beats so we don't always start late
-  let t = seed;
-  while (t - beatSec > 0) t -= beatSec;
-  // forward beats
-  for (; t < dur; t += beatSec) beats.push(t);
+  while (t < dur) { beats.push(t); t += beatSec; }
 
-  // --- Onset times (peaks) ---
+  // Onset peaks
   const onsets: number[] = [];
-  for (let i = 1; i < numFrames - 1; i++) {
+  for (let i = 1; i < onsetEnv.length - 1; i++) {
     if (onsetEnv[i] > 0.15 && onsetEnv[i] > onsetEnv[i - 1] && onsetEnv[i] > onsetEnv[i + 1]) {
       onsets.push(i * hopSec);
     }
   }
 
-  // --- Key (stub) ---
   const key = { tonic: "C", scale: "major" as KeyScale, confidence: 0 };
+  return { bpm, sampleRate: sr, beats, onsets, rms, frameHopSec: hopSec, key };
+}
 
-  return {
-    bpm,
-    sampleRate: sr,
-    beats,
-    onsets,
-    rms,
-    frameHopSec: hopSec,
-    key,
-  };
+/* -------------------- helpers -------------------- */
+
+function computeFrameRMS(signal: Float32Array, sr: number, frameSize = 2048, hopSize = 512) {
+  const numFrames = Math.max(1, Math.floor((signal.length - frameSize) / hopSize));
+  const rms = new Array<number>(numFrames);
+  for (let i = 0; i < numFrames; i++) {
+    const start = i * hopSize; let sum = 0;
+    for (let j = 0; j < frameSize; j++) { const v = signal[start + j] || 0; sum += v * v; }
+    rms[i] = Math.sqrt(sum / frameSize);
+  }
+  return { rms, hopSec: hopSize / sr };
+}
+
+function estimateBPMFromEnvelope(env: number[], hopSec: number, minBPM: number, maxBPM: number): number {
+  const minLag = Math.floor((60 / maxBPM) / hopSec);
+  const maxLag = Math.floor((60 / minBPM) / hopSec);
+  let mean = 0; for (let i = 0; i < env.length; i++) mean += env[i];
+  mean /= Math.max(1, env.length);
+  const z = env.map(v => v - mean);
+  let bestLag = minLag, bestVal = -Infinity;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let acc = 0;
+    for (let i = lag; i < z.length; i++) acc += z[i] * z[i - lag];
+    if (acc > bestVal) { bestVal = acc; bestLag = lag; }
+  }
+  return Math.max(60, Math.min(180, 60 / (bestLag * hopSec)));
 }

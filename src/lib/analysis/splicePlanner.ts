@@ -39,13 +39,13 @@ export function planSplice(
   } = analysisA;
 
   const {
-    bpm: bpmB,
+    // bpm: bpmB,
     beats: beatsB,
   } = analysisB;
 
   // -------- 0) Defensive defaults --------
   const safeBpmA = Number.isFinite(bpmA) && bpmA > 0 ? bpmA : 120;
-  const _safeBpmB = Number.isFinite(bpmB) && bpmB > 0 ? bpmB : 120; // TODO: used in tempo normalization
+  // const _safeBpmB = Number.isFinite(bpmB) && bpmB > 0 ? bpmB : 120; // TODO: used in tempo normalization
   const secPerBeatA = 60 / safeBpmA;
   // const secPerBeatB = 60 / safeBpmB;
 
