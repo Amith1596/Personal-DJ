@@ -7,7 +7,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 ![Python](https://img.shields.io/badge/Python-3.11-blue)
 
-**🚀 Live App:** [https://personal-dj.vercel.app](https://personal-dj.vercel.app)
+**🚀 Live App:** [https://personal-dj-nine.vercel.app](https://personal-dj-nine.vercel.app)
 
 **🚀 This is an active development project**
 
@@ -341,7 +341,7 @@ Developer interface with:
 
 **v1.0 Frontend:**
 - Platform: Vercel
-- Live URL: [https://personal-dj.vercel.app](https://personal-dj.vercel.app)
+- Live URL: [https://personal-dj-nine.vercel.app](https://personal-dj-nine.vercel.app)
 - GitHub: [https://github.com/Amith1596/Personal-DJ](https://github.com/Amith1596/Personal-DJ)
 
 **v2.0 Backend:** Railway.app free tier (500 hrs/month) - *Not deployed yet*
