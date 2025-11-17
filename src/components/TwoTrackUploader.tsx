@@ -68,7 +68,6 @@ export default function TwoTrackUploader() {
   const waveSurferA = useRef<WaveSurfer | null>(null);
   const waveSurferB = useRef<WaveSurfer | null>(null);
 
-  const canMix = useMemo(() => !!fileA && !!fileB && !isProcessing, [fileA, fileB, isProcessing]);
   const canPreview = useMemo(() => !!fileA && !!fileB && !isProcessing, [fileA, fileB, isProcessing]);
   const canDownload = useMemo(() => !!previewUrl && !isProcessing, [previewUrl, isProcessing]);
   const bothFilesUploaded = useMemo(() => !!fileA && !!fileB, [fileA, fileB]);
@@ -229,7 +228,7 @@ export default function TwoTrackUploader() {
           </h1>
         </div>
         <p className="text-lg text-[var(--text-secondary)] max-w-2xl mx-auto">
-          Drop in two songs and we'll build a <span className="text-[var(--primary)] font-medium">DJ-style transition</span> between them.
+          Drop in two songs and we&apos;ll build a <span className="text-[var(--primary)] font-medium">DJ-style transition</span> between them.
         </p>
 
         {/* BPM Badges */}
