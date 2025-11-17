@@ -263,7 +263,7 @@ export default function TwoTrackUploader() {
             <div className="flex items-center justify-between">
               <div>
                 <span className="font-semibold text-[var(--text-primary)]">🎵 Track A · Fading out</span>
-                <p className="text-xs text-[var(--text-muted)] mt-1">This is the song you're transitioning from.</p>
+                <p className="text-xs text-[var(--text-muted)] mt-1">This is the song you&apos;re transitioning from.</p>
               </div>
               {fileA && (
                 <button onClick={() => setFileA(null)} className="text-xs text-[var(--error)] hover:underline">
@@ -294,7 +294,7 @@ export default function TwoTrackUploader() {
             <div className="flex items-center justify-between">
               <div>
                 <span className="font-semibold text-[var(--text-primary)]">🎵 Track B · Fading in</span>
-                <p className="text-xs text-[var(--text-muted)] mt-1">This is the song you're transitioning into.</p>
+                <p className="text-xs text-[var(--text-muted)] mt-1">This is the song you&apos;re transitioning into.</p>
               </div>
               {fileB && (
                 <button onClick={() => setFileB(null)} className="text-xs text-[var(--error)] hover:underline">
@@ -361,7 +361,7 @@ export default function TwoTrackUploader() {
             </div>
             {VIBES.find(v => v.value === vibe) && (
               <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                <span className="font-medium text-[var(--text-primary)]">"{VIBES.find(v => v.value === vibe)?.label}"</span> · {VIBES.find(v => v.value === vibe)?.description}
+                <span className="font-medium text-[var(--text-primary)]">&quot;{VIBES.find(v => v.value === vibe)?.label}&quot;</span> · {VIBES.find(v => v.value === vibe)?.description}
               </p>
             )}
           </div>
@@ -386,7 +386,7 @@ export default function TwoTrackUploader() {
             </div>
             {BLENDS.find(b => b.value === blend) && (
               <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                <span className="font-medium text-[var(--text-primary)]">"{BLENDS.find(b => b.value === blend)?.label}"</span> · {BLENDS.find(b => b.value === blend)?.description}
+                <span className="font-medium text-[var(--text-primary)]">&quot;{BLENDS.find(b => b.value === blend)?.label}&quot;</span> · {BLENDS.find(b => b.value === blend)?.description}
               </p>
             )}
           </div>
@@ -483,7 +483,7 @@ export default function TwoTrackUploader() {
             <audio ref={audioRef} controls className="w-full" src={previewUrl ?? undefined} />
 
             {!previewUrl && (
-              <p className="mt-2 text-xs text-[var(--text-muted)]">Click "Preview transition" above to render a 45s snippet.</p>
+              <p className="mt-2 text-xs text-[var(--text-muted)]">Click &quot;Preview transition&quot; above to render a 45s snippet.</p>
             )}
             {playbackState === 'ended' && (
               <p className="mt-2 text-xs text-[var(--success)] font-medium">✓ Finished! Press Play to hear it again.</p>
