@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Audio files (large, don't commit)
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.m4a
+
+# Demucs output
+separated/
+
+# Environment
+.env
+
+# OS
+.DS_Store
