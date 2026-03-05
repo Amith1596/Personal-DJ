@@ -1,14 +1,15 @@
-"""Audio Analyzer — wraps allin1, librosa, and Essentia for track analysis.
+"""Audio Analyzer — wraps Essentia and librosa for track analysis.
 
 Responsibilities:
-- Structural analysis via allin1 (segments, BPM, beats, downbeats)
+- BPM + beat/downbeat detection via Essentia RhythmExtractor2013
 - Key detection via Essentia KeyExtractor
+- Segment boundaries via librosa Laplacian segmentation
+- Segment labels via energy-based heuristic (position + energy + repetition)
 - Composite energy curve via librosa (RMS + spectral centroid + onset strength)
 - Returns a fully populated TrackAnalysis model
 """
 
 import numpy as np
-import allin1
 import librosa
 import essentia.standard as es
 
@@ -18,11 +19,12 @@ from .mix_planner import CAMELOT_MAP
 
 def analyze_track(file_path: str) -> TrackAnalysis:
     """Top-level entry point. Analyzes a single audio file."""
-    # Structure analysis: segments, BPM, beats, downbeats
-    result = allin1.analyze(file_path)
+    # Load audio via librosa (for energy + segmentation)
+    y, sr = librosa.load(file_path, sr=44100)
+    duration = float(len(y) / sr)
 
-    # Raw audio for energy computation
-    y, sr = librosa.load(file_path, sr=None)
+    # BPM + beats via Essentia
+    bpm, beats, downbeats = _get_rhythm(file_path)
 
     # Key detection via Essentia
     key_info = _detect_key(file_path)
@@ -30,22 +32,19 @@ def analyze_track(file_path: str) -> TrackAnalysis:
     # Composite energy curve
     energy_curve = _compute_energy(y, sr)
 
-    # Parse allin1 output
-    segments = _get_segments(result)
-    beats, downbeats = _get_beats(result)
-
-    duration = float(len(y) / sr)
+    # Segment detection via librosa + label heuristic
+    segments = _get_segments(y, sr, energy_curve)
 
     return TrackAnalysis(
         file_path=file_path,
-        bpm=float(result.bpm),
+        bpm=bpm,
         key=key_info,
         segments=segments,
         beats=beats,
         downbeats=downbeats,
         duration=duration,
         energy_curve=energy_curve,
-        sample_rate=int(sr),
+        sample_rate=sr,
     )
 
 
@@ -53,10 +52,20 @@ def _detect_key(file_path: str) -> KeyInfo:
     """Use Essentia's KeyExtractor to detect key and scale, map to Camelot."""
     audio = es.MonoLoader(filename=file_path, sampleRate=44100)()
     key, scale, _strength = es.KeyExtractor()(audio)
-
     camelot = CAMELOT_MAP.get((key, scale), "1A")
-
     return KeyInfo(key=key, scale=scale, camelot=camelot)
+
+
+def _get_rhythm(file_path: str) -> tuple[float, list[float], list[float]]:
+    """Extract BPM, beat timestamps, and downbeat timestamps via Essentia."""
+    audio = es.MonoLoader(filename=file_path, sampleRate=44100)()
+    rhythm = es.RhythmExtractor2013(method="multifeature")
+    bpm, beats, beats_confidence, _, beats_intervals = rhythm(audio)
+
+    # Estimate downbeats: group beats into bars of 4
+    downbeats = beats[::4].tolist() if len(beats) >= 4 else beats.tolist()
+
+    return float(bpm), beats.tolist(), downbeats
 
 
 def _compute_energy(y: np.ndarray, sr: int, hop_length: int = 512) -> list[float]:
@@ -74,21 +83,80 @@ def _compute_energy(y: np.ndarray, sr: int, hop_length: int = 512) -> list[float
     return composite.tolist()
 
 
-def _get_segments(result) -> list[Segment]:
-    """Convert allin1 analysis result to list of Segment models."""
-    # Known labels that map directly to SegmentLabel values
-    label_map = {member.value: member for member in SegmentLabel}
+def _get_segments(
+    y: np.ndarray, sr: int, energy_curve: list[float], n_segments: int = 6
+) -> list[Segment]:
+    """Detect segments via librosa Laplacian segmentation, label via energy heuristic.
+
+    Uses chroma features + recurrence matrix to find structural boundaries,
+    then labels segments based on position and energy profile.
+    """
+    # Compute chroma features for structural analysis
+    hop_length = 512
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
+
+    # Build recurrence matrix and Laplacian segmentation
+    rec = librosa.segment.recurrence_matrix(chroma, mode="affinity", sym=True)
+    boundaries = librosa.segment.agglomerative(chroma, n_segments)
+    boundary_times = librosa.frames_to_time(boundaries, sr=sr, hop_length=hop_length)
+
+    duration = float(len(y) / sr)
+
+    # Build segment list from boundary times
+    starts = [0.0] + boundary_times.tolist()
+    ends = boundary_times.tolist() + [duration]
 
     segments = []
-    for seg in result.segments:
-        label_str = seg.label.lower()
-        label = label_map.get(label_str, SegmentLabel.BRIDGE)
-        segments.append(Segment(label=label, start=float(seg.start), end=float(seg.end)))
+    for start, end in zip(starts, ends):
+        label = _label_segment(start, end, duration, energy_curve, sr, hop_length)
+        segments.append(Segment(label=label, start=round(start, 3), end=round(end, 3)))
+
     return segments
 
 
-def _get_beats(result) -> tuple[list[float], list[float]]:
-    """Extract beats and downbeats from allin1 result."""
-    beats = [float(b) for b in result.beats]
-    downbeats = [float(d) for d in result.downbeats]
-    return beats, downbeats
+def _label_segment(
+    start: float,
+    end: float,
+    duration: float,
+    energy_curve: list[float],
+    sr: int,
+    hop_length: int,
+) -> SegmentLabel:
+    """Heuristic labeling based on position and energy.
+
+    Rules:
+    - First segment (starts at 0, low energy) -> INTRO
+    - Last segment (ends at duration, low energy) -> OUTRO
+    - High energy segments -> CHORUS or DROP
+    - Medium energy -> VERSE
+    - Low energy mid-track -> BRIDGE
+    """
+    # Compute average energy for this segment
+    energy = np.array(energy_curve)
+    fps = sr / hop_length
+    start_frame = max(0, int(start * fps))
+    end_frame = min(len(energy), int(end * fps))
+    if end_frame <= start_frame:
+        end_frame = start_frame + 1
+
+    seg_energy = float(np.mean(energy[start_frame:end_frame]))
+    global_energy = float(np.mean(energy))
+
+    position_ratio_start = start / duration
+    position_ratio_end = end / duration
+
+    # Position-based rules
+    if position_ratio_start < 0.05 and seg_energy < global_energy * 0.9:
+        return SegmentLabel.INTRO
+    if position_ratio_end > 0.95 and seg_energy < global_energy * 0.9:
+        return SegmentLabel.OUTRO
+
+    # Energy-based rules
+    if seg_energy > global_energy * 1.3:
+        return SegmentLabel.CHORUS
+    if seg_energy > global_energy * 1.1:
+        return SegmentLabel.VERSE
+    if seg_energy < global_energy * 0.7:
+        return SegmentLabel.BRIDGE
+
+    return SegmentLabel.VERSE

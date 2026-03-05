@@ -64,7 +64,6 @@ def _separate_stems(file_path: str) -> dict[str, np.ndarray]:
             "python",
             "-m",
             "demucs",
-            "--two-stems=None",
             "-n",
             "htdemucs_ft",
             "-o",
