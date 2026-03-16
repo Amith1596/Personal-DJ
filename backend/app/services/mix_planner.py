@@ -76,15 +76,16 @@ ENTRY_LABELS = {SegmentLabel.VERSE, SegmentLabel.INTRO, SegmentLabel.BRIDGE}
 # --- Section Scoring ---
 
 
-def score_segment(segment: Segment, energy_curve: np.ndarray, sr: int) -> float:
+def score_segment(segment: Segment, energy_curve: np.ndarray, fps: float) -> float:
     """Score a segment by type weight, average energy, and duration penalty.
 
+    fps = frames per second in the energy curve (len(energy_curve) / duration).
     Returns a float >= 0. Higher is better.
     """
     weight = TYPE_WEIGHTS.get(segment.label, 0.5)
 
-    start_frame = int(segment.start * sr)
-    end_frame = int(segment.end * sr)
+    start_frame = int(segment.start * fps)
+    end_frame = int(segment.end * fps)
     # Clamp to energy curve bounds
     start_frame = max(0, min(start_frame, len(energy_curve) - 1))
     end_frame = max(start_frame + 1, min(end_frame, len(energy_curve)))
@@ -100,9 +101,12 @@ def score_segment(segment: Segment, energy_curve: np.ndarray, sr: int) -> float:
 def select_best_section(analysis: TrackAnalysis) -> Segment:
     """Pick the highest-scoring segment from a track's analysis."""
     energy = np.array(analysis.energy_curve)
+    # Energy curve is frame-indexed, not sample-indexed. Derive fps from data.
+    fps = len(energy) / analysis.duration if analysis.duration > 0 else 1.0
     scored = [
-        (seg, score_segment(seg, energy, analysis.sample_rate))
+        (seg, score_segment(seg, energy, fps))
         for seg in analysis.segments
+        if seg.end > seg.start  # skip zero-length segments
     ]
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[0][0]
@@ -142,9 +146,9 @@ def camelot_distance(code_a: str, code_b: str) -> int:
 # --- Cue Point Scoring ---
 
 
-def _energy_at_time(time: float, energy_curve: np.ndarray, sr: int) -> float:
-    """Sample the energy curve at a given time."""
-    idx = int(time * sr)
+def _energy_at_time(time: float, energy_curve: np.ndarray, fps: float) -> float:
+    """Sample the energy curve at a given time. fps = frames per second."""
+    idx = int(time * fps)
     idx = max(0, min(idx, len(energy_curve) - 1))
     return float(energy_curve[idx])
 
@@ -152,13 +156,16 @@ def _energy_at_time(time: float, energy_curve: np.ndarray, sr: int) -> float:
 def build_cue_points(analysis: TrackAnalysis) -> list[CuePoint]:
     """Build candidate cue points at every segment boundary."""
     energy = np.array(analysis.energy_curve)
+    fps = len(energy) / analysis.duration if analysis.duration > 0 else 1.0
     cues = []
     for seg in analysis.segments:
+        if seg.end <= seg.start:
+            continue  # skip zero-length segments
         # Cue at segment start
-        e = _energy_at_time(seg.start, energy, analysis.sample_rate)
+        e = _energy_at_time(seg.start, energy, fps)
         cues.append(CuePoint(segment=seg, time=seg.start, energy=e))
         # Cue at segment end
-        e = _energy_at_time(seg.end, energy, analysis.sample_rate)
+        e = _energy_at_time(seg.end, energy, fps)
         cues.append(CuePoint(segment=seg, time=seg.end, energy=e))
     return cues
 

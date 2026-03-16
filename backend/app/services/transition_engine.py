@@ -49,8 +49,20 @@ def _load_audio_segment(
 ) -> np.ndarray:
     """Load a segment of audio from file_path between start and end seconds."""
     duration = end - start
+    if duration <= 0:
+        return np.array([], dtype=np.float32)
     y, _ = librosa.load(file_path, sr=sr, offset=start, duration=duration, mono=True)
     return y
+
+
+def _splice_crossfade(a: np.ndarray, b: np.ndarray, fade_samples: int) -> np.ndarray:
+    """Join two audio arrays with a short overlap-add crossfade to avoid clicks."""
+    if len(a) < fade_samples or len(b) < fade_samples or fade_samples <= 0:
+        return np.concatenate([a, b])
+    fade_out = np.linspace(1.0, 0.0, fade_samples)
+    fade_in = np.linspace(0.0, 1.0, fade_samples)
+    overlap = a[-fade_samples:] * fade_out + b[:fade_samples] * fade_in
+    return np.concatenate([a[:-fade_samples], overlap, b[fade_samples:]])
 
 
 # --- Stem Separation ---
@@ -316,14 +328,22 @@ def render_transition(mix_plan: MixPlan, output_path: str) -> str:
     transition_samples = _bars_to_samples(transition_bars, bpm, sr)
     transition_duration_sec = transition_samples / sr
 
-    # Load section A: from section start to exit point
-    section_a_start = mix_plan.selected_section_a.start
-    section_a_end = exit_time
+    # --- Pre-transition A: Song A's selected section up to exit cue ---
+    # Derived from actual section length, not hardcoded. If the exit cue is
+    # far past the selected section, cap at the section's own duration (so we
+    # play roughly one "best part" worth of Song A). Minimum 30s floor so
+    # short sections still get enough context.
+    sec_a = mix_plan.selected_section_a
+    section_a_duration = sec_a.end - sec_a.start
+    max_pre_sec = max(section_a_duration, 30.0)
+    section_a_start = sec_a.start
+    if exit_time - section_a_start > max_pre_sec:
+        section_a_start = exit_time - max_pre_sec
     audio_a_pre = _load_audio_segment(
-        mix_plan.track_a.file_path, section_a_start, section_a_end, sr
+        mix_plan.track_a.file_path, section_a_start, exit_time, sr
     )
 
-    # Load transition region of A: exit_time to exit_time + transition_duration
+    # --- Transition region of A: continuing from exit cue ---
     audio_a_trans = _load_audio_segment(
         mix_plan.track_a.file_path,
         exit_time,
@@ -331,17 +351,34 @@ def render_transition(mix_plan: MixPlan, output_path: str) -> str:
         sr,
     )
 
-    # Load transition region of B: entry_time - transition_duration to entry_time
-    b_trans_start = max(0, entry_time - transition_duration_sec)
+    # --- Transition region of B: starting FROM entry cue (forward, not backward) ---
     audio_b_trans = _load_audio_segment(
-        mix_plan.track_b.file_path, b_trans_start, entry_time, sr
+        mix_plan.track_b.file_path,
+        entry_time,
+        min(entry_time + transition_duration_sec, mix_plan.track_b.duration),
+        sr,
     )
 
-    # Load section B: from entry point to section end
-    section_b_end = mix_plan.selected_section_b.end
-    audio_b_post = _load_audio_segment(
-        mix_plan.track_b.file_path, entry_time, section_b_end, sr
-    )
+    # --- Post-transition B: from where transition ends through B's best section ---
+    # The goal: play enough of Song B for the listener to reach its best part.
+    # If we entered at the intro but the best section is the chorus 90s later,
+    # we need to play through to it. If the best section already passed during
+    # the transition, fall back to proportional balance (match A's duration).
+    b_post_start = entry_time + transition_duration_sec
+    sec_b = mix_plan.selected_section_b
+    b_post_end = sec_b.end
+    if b_post_end <= b_post_start:
+        # Best section already passed during transition.
+        # Proportional fallback: give Song B the same airtime as Song A got.
+        a_pre_duration = exit_time - section_a_start
+        b_post_end = min(b_post_start + a_pre_duration, mix_plan.track_b.duration)
+    b_post_end = min(b_post_end, mix_plan.track_b.duration)
+    if b_post_start < b_post_end:
+        audio_b_post = _load_audio_segment(
+            mix_plan.track_b.file_path, b_post_start, b_post_end, sr
+        )
+    else:
+        audio_b_post = np.array([], dtype=np.float32)
 
     # Dispatch to strategy
     strategy = mix_plan.strategy
@@ -351,7 +388,7 @@ def render_transition(mix_plan: MixPlan, output_path: str) -> str:
         stems_b = _separate_stems(mix_plan.track_b.file_path)
         # Trim stems to transition region
         start_sample_a = int(exit_time * sr)
-        start_sample_b = int(b_trans_start * sr)
+        start_sample_b = int(entry_time * sr)
         trimmed_a = {
             k: v[start_sample_a : start_sample_a + transition_samples]
             for k, v in stems_a.items()
@@ -366,7 +403,7 @@ def render_transition(mix_plan: MixPlan, output_path: str) -> str:
         stems_a = _separate_stems(mix_plan.track_a.file_path)
         stems_b = _separate_stems(mix_plan.track_b.file_path)
         start_sample_a = int(exit_time * sr)
-        start_sample_b = int(b_trans_start * sr)
+        start_sample_b = int(entry_time * sr)
         trimmed_a = {
             k: v[start_sample_a : start_sample_a + transition_samples]
             for k, v in stems_a.items()
@@ -395,8 +432,17 @@ def render_transition(mix_plan: MixPlan, output_path: str) -> str:
         # Fallback to beat loop
         transition_audio = _beat_loop(audio_a_trans, audio_b_trans, sr, bpm)
 
-    # Build final audio: [pre-transition A] + [transition] + [post-transition B]
-    final_audio = np.concatenate([audio_a_pre, transition_audio, audio_b_post])
+    # Build final audio with crossfades at splice points to avoid clicks
+    splice_samples = int(0.01 * sr)  # 10ms overlap-add crossfade
+    final_audio = _splice_crossfade(audio_a_pre, transition_audio, splice_samples)
+    if len(audio_b_post) > 0:
+        final_audio = _splice_crossfade(final_audio, audio_b_post, splice_samples)
+
+    # Gentle fade out at end: 2 bars at track B's tempo (scales with BPM)
+    fade_out_bpm = mix_plan.track_b.bpm or bpm
+    fade_out_samples = min(_bars_to_samples(2, fade_out_bpm, sr), len(final_audio))
+    if fade_out_samples > 0:
+        final_audio[-fade_out_samples:] *= np.linspace(1.0, 0.0, fade_out_samples)
 
     # Normalize to prevent clipping
     peak = np.max(np.abs(final_audio))

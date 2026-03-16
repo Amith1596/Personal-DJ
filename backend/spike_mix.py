@@ -77,6 +77,17 @@ def main():
             f"  Entry cue: {plan.cue_pair.entry_cue.segment.label.value} @ {plan.cue_pair.entry_cue.time:.1f}s"
         )
         print(f"  Transition: {plan.transition_duration_bars} bars")
+        print(f"  Selected section A: {plan.selected_section_a.label.value} "
+              f"[{plan.selected_section_a.start:.1f}s - {plan.selected_section_a.end:.1f}s]")
+        print(f"  Selected section B: {plan.selected_section_b.label.value} "
+              f"[{plan.selected_section_b.start:.1f}s - {plan.selected_section_b.end:.1f}s]")
+        # Show all segments for both tracks
+        print(f"  --- Track A segments ---")
+        for s in analysis_a.segments:
+            print(f"    {s.label.value:8s} [{s.start:.1f}s - {s.end:.1f}s]")
+        print(f"  --- Track B segments ---")
+        for s in analysis_b.segments:
+            print(f"    {s.label.value:8s} [{s.start:.1f}s - {s.end:.1f}s]")
     print(f"  Done in {t1 - t0:.3f}s")
 
     # Step 3: Render

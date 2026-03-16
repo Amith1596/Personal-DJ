@@ -102,12 +102,14 @@ def _get_segments(
 
     duration = float(len(y) / sr)
 
-    # Build segment list from boundary times
-    starts = [0.0] + boundary_times.tolist()
-    ends = boundary_times.tolist() + [duration]
-
+    # Build segment list from boundary times, filtering zero-length segments
+    # Clip boundaries to track duration (librosa frames can overshoot slightly)
+    valid_times = [t for t in boundary_times.tolist() if 0 < t < duration]
+    all_boundaries = sorted(set([0.0] + valid_times + [duration]))
     segments = []
-    for start, end in zip(starts, ends):
+    for start, end in zip(all_boundaries[:-1], all_boundaries[1:]):
+        if end <= start:
+            continue
         label = _label_segment(start, end, duration, energy_curve, sr, hop_length)
         segments.append(Segment(label=label, start=round(start, 3), end=round(end, 3)))
 

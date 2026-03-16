@@ -32,42 +32,42 @@ from tests.conftest import _make_analysis, _make_energy_curve, _make_segment
 
 class TestScoreSegment:
     def test_chorus_scores_higher_than_intro(self):
-        sr = 1
+        fps = 1.0  # 1 frame per second (matching energy curve of 240 elements / 240s)
         energy = [0.5] * 240
         chorus = _make_segment(SegmentLabel.CHORUS, 30, 60)
         intro = _make_segment(SegmentLabel.INTRO, 0, 30)
-        assert score_segment(chorus, energy, sr) > score_segment(intro, energy, sr)
+        assert score_segment(chorus, energy, fps) > score_segment(intro, energy, fps)
 
     def test_higher_energy_scores_higher(self):
         import numpy as np
 
-        sr = 1
+        fps = 1.0
         energy = np.zeros(240)
         energy[30:60] = 0.9  # high-energy zone
         energy[60:90] = 0.2  # low-energy zone
         seg_high = _make_segment(SegmentLabel.VERSE, 30, 60)
         seg_low = _make_segment(SegmentLabel.VERSE, 60, 90)
-        assert score_segment(seg_high, energy, sr) > score_segment(seg_low, energy, sr)
+        assert score_segment(seg_high, energy, fps) > score_segment(seg_low, energy, fps)
 
     def test_short_segment_gets_duration_penalty(self):
-        sr = 1
+        fps = 1.0
         energy = [0.5] * 240
         short = _make_segment(SegmentLabel.CHORUS, 10, 20)  # 10s < 15s threshold
         normal = _make_segment(SegmentLabel.CHORUS, 30, 60)  # 30s, within range
-        assert score_segment(normal, energy, sr) > score_segment(short, energy, sr)
+        assert score_segment(normal, energy, fps) > score_segment(short, energy, fps)
 
     def test_long_segment_gets_duration_penalty(self):
-        sr = 1
+        fps = 1.0
         energy = [0.5] * 300
         long = _make_segment(SegmentLabel.CHORUS, 0, 100)  # 100s > 90s threshold
         normal = _make_segment(SegmentLabel.CHORUS, 100, 160)  # 60s, within range
-        assert score_segment(normal, energy, sr) > score_segment(long, energy, sr)
+        assert score_segment(normal, energy, fps) > score_segment(long, energy, fps)
 
     def test_zero_energy_returns_zero(self):
-        sr = 1
+        fps = 1.0
         energy = [0.0] * 240
         seg = _make_segment(SegmentLabel.CHORUS, 30, 60)
-        assert score_segment(seg, energy, sr) == 0.0
+        assert score_segment(seg, energy, fps) == 0.0
 
 
 # --- select_best_section ---

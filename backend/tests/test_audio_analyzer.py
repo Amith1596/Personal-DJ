@@ -211,13 +211,14 @@ class TestGetSegments:
         mock_librosa.segment.agglomerative.return_value = boundary_frames
         mock_librosa.feature.chroma_cqt.return_value = np.random.rand(12, 1000)
         mock_librosa.segment.recurrence_matrix.return_value = np.eye(1000)
+        # Boundary times must be within track duration (120s)
         mock_librosa.frames_to_time.return_value = np.array(
-            [23.2, 69.7, 116.3, 162.8, 209.3]
+            [20.0, 40.0, 60.0, 80.0, 100.0]
         )
 
         segments = _get_segments(y, sr, energy, n_segments=6)
 
-        # 5 boundaries -> 6 segments
+        # 5 boundaries within duration -> 6 segments
         assert len(segments) == 6
         assert segments[0].start == 0.0
         assert segments[-1].end == pytest.approx(120.0, abs=0.1)
