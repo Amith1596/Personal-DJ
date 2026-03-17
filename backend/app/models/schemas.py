@@ -135,6 +135,29 @@ class MixStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class ManualSegment(BaseModel):
+    """A user-specified segment: file path + start/end timestamps."""
+
+    file_path: str
+    start_time: float = Field(description="Start time in seconds")
+    end_time: float = Field(description="End time in seconds")
+
+
+class ManualMixRequest(BaseModel):
+    """Request body for POST /api/v1/mix/manual."""
+
+    songs: list[ManualSegment] = Field(
+        min_length=2, max_length=5, description="2-5 songs with timestamps"
+    )
+
+
+class TransitionPreviewRequest(BaseModel):
+    """Request body for POST /api/v1/transition/preview."""
+
+    song_a: ManualSegment
+    song_b: ManualSegment
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "2.0.0-spike"

@@ -13,6 +13,7 @@ import numpy as np
 from ..models.schemas import (
     CuePoint,
     CuePointPair,
+    ManualSegment,
     MixPlan,
     Segment,
     SegmentLabel,
@@ -260,6 +261,75 @@ def create_mix_plan(
     section_b = select_best_section(analysis_b)
 
     cue_pair = select_best_cue_pair(analysis_a, analysis_b)
+
+    strategy = select_strategy(cue_pair.camelot_distance)
+
+    return MixPlan(
+        track_a=analysis_a,
+        track_b=analysis_b,
+        selected_section_a=section_a,
+        selected_section_b=section_b,
+        cue_pair=cue_pair,
+        strategy=strategy,
+    )
+
+
+def _label_by_energy(energy_level: float) -> SegmentLabel:
+    """Assign a segment label based on energy level (simple heuristic)."""
+    if energy_level >= 0.7:
+        return SegmentLabel.DROP
+    if energy_level >= 0.5:
+        return SegmentLabel.CHORUS
+    if energy_level >= 0.3:
+        return SegmentLabel.VERSE
+    return SegmentLabel.INTRO
+
+
+def create_mix_plan_manual(
+    analysis_a: TrackAnalysis,
+    analysis_b: TrackAnalysis,
+    seg_a: ManualSegment,
+    seg_b: ManualSegment,
+) -> MixPlan:
+    """Create a MixPlan from user-provided timestamps.
+
+    The user specifies exact start/end times for each song. The exit cue is
+    placed at seg_a.end_time and the entry cue at seg_b.start_time. Energy
+    is sampled from the analysis to label segments and score the cue pair.
+    Strategy is selected from Camelot distance as normal.
+    """
+    energy_a = np.array(analysis_a.energy_curve)
+    fps_a = len(energy_a) / analysis_a.duration if analysis_a.duration > 0 else 1.0
+    energy_b = np.array(analysis_b.energy_curve)
+    fps_b = len(energy_b) / analysis_b.duration if analysis_b.duration > 0 else 1.0
+
+    # Sample energy at exit/entry points
+    exit_energy = _energy_at_time(seg_a.end_time, energy_a, fps_a)
+    entry_energy = _energy_at_time(seg_b.start_time, energy_b, fps_b)
+
+    # Build segments from user timestamps, labeled by energy
+    section_a = Segment(
+        label=_label_by_energy(exit_energy),
+        start=seg_a.start_time,
+        end=seg_a.end_time,
+    )
+    section_b = Segment(
+        label=_label_by_energy(entry_energy),
+        start=seg_b.start_time,
+        end=seg_b.end_time,
+    )
+
+    exit_cue = CuePoint(segment=section_a, time=seg_a.end_time, energy=exit_energy)
+    entry_cue = CuePoint(segment=section_b, time=seg_b.start_time, energy=entry_energy)
+
+    cue_pair = score_cue_pair(
+        exit_cue,
+        entry_cue,
+        analysis_a.key.camelot,
+        analysis_b.key.camelot,
+        analysis_a.bpm,
+        analysis_b.bpm,
+    )
 
     strategy = select_strategy(cue_pair.camelot_distance)
 
