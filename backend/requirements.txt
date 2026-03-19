@@ -1,0 +1,22 @@
+# Core API
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# Audio analysis
+allin1>=1.0.0
+librosa>=0.10.0
+essentia>=2.1b6
+madmom>=0.16.1
+soundfile>=0.12.0
+
+# Stem separation
+demucs>=4.0.0
+
+# Audio processing
+pedalboard>=0.9.0
+pyrubberband>=0.3.0
+pydub>=0.25.0
+
+# Utilities
+numpy>=1.24.0
