@@ -9,10 +9,10 @@ section selection, transition engineering, rendering.
 **v1.0 (SHIPPED):** Client-side 2-track mixer with crossfade vibes.
 Live at https://personal-dj-nine.vercel.app
 
-**v2.0 (BUILDING):** Upload 2 songs via web UI. System analyzes both,
-selects the best sections, engineers a seamless transition, outputs a
-mixed audio file. DJs pick parts, not full songs. Quality over quantity.
-Nail 2-song transitions before expanding to playlists.
+**v2.0 (MERGED):** Python backend with stem-aware mixing. Manual mode
+supports 2-5 song chains with user-specified timestamps. Auto mode
+selects best sections and transitions automatically. 118 tests passing.
+Backend runs locally only (not deployed to Vercel).
 
 ---
 
@@ -179,7 +179,7 @@ contribution.
 
 ## Build Phases
 
-### Phase 0: Spike (CURRENT)
+### Phase 0: Spike (COMPLETE)
 
 Validate that the transition quality is good enough before building any UI.
 
@@ -283,4 +283,4 @@ crossfade, while adding stem-aware mixing that v1.0 can't do.
 
 ---
 
-Last Updated: 2026-03-03
+Last Updated: 2026-03-18
