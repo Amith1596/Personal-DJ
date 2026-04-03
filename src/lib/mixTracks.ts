@@ -12,7 +12,9 @@ export async function mixTracks(
   crossfadeSec: number,
   vibe: Vibe,
   previewOnly: boolean,
-  blend: Blend = "equalPower"
+  blend: Blend = "equalPower",
+  userSpliceA?: number,
+  userSpliceB?: number,
 ): Promise<Blob> {
   const RT =
     window.AudioContext ||
@@ -36,7 +38,9 @@ export async function mixTracks(
 
   const params: TransitionParams = {
     ctx, bufA, bufB, anaA, anaB,
-    spliceCenter, crossfadeSec, blend
+    spliceCenter, crossfadeSec, blend,
+    userOffsetA: userSpliceA,
+    userOffsetB: userSpliceB,
   };
 
   if (vibe === "beatDrop") {

@@ -188,11 +188,15 @@ export interface TransitionParams {
   spliceCenter: number;
   crossfadeSec: number;
   blend: Blend;
+  /** Optional user-specified offset (seconds) into Track A where transition starts */
+  userOffsetA?: number;
+  /** Optional user-specified offset (seconds) into Track B where it enters */
+  userOffsetB?: number;
 }
 
 /** Default pro crossfade */
 export function basicCrossfade(params: TransitionParams) {
-  const { ctx, bufA, bufB, spliceCenter, crossfadeSec, blend } = params;
+  const { ctx, bufA, bufB, spliceCenter, crossfadeSec, blend, userOffsetA, userOffsetB } = params;
 
   const srcA = ctx.createBufferSource(); srcA.buffer = bufA;
   const srcB = ctx.createBufferSource(); srcB.buffer = bufB;
@@ -203,17 +207,24 @@ export function basicCrossfade(params: TransitionParams) {
   srcB.connect(gB).connect(ctx.destination);
 
   const fadeStart = spliceCenter - crossfadeSec / 2;
-  const offsetA = Math.max(30, bufA.duration - (spliceCenter + crossfadeSec));
+
+  // If user specified a splice point in Track A, position audio so the
+  // crossfade center aligns with that timestamp. Otherwise use auto.
+  const offsetA = userOffsetA !== undefined
+    ? Math.max(0, userOffsetA - spliceCenter)
+    : Math.max(30, bufA.duration - (spliceCenter + crossfadeSec));
+
+  const offsetB = userOffsetB ?? 0;
 
   srcA.start(0, offsetA);
-  srcB.start(fadeStart, 0);
+  srcB.start(fadeStart, offsetB);
 
   applyBlend(gA.gain, gB.gain, fadeStart, crossfadeSec, blend);
 }
 
 /** BeatDrop: align B’s strongest drop at spliceCenter */
 export function beatDropTransition(params: TransitionParams) {
-  const { ctx, bufA, bufB, anaB, spliceCenter, crossfadeSec, blend } = params;
+  const { ctx, bufA, bufB, anaB, spliceCenter, crossfadeSec, blend, userOffsetA, userOffsetB } = params;
 
   const srcA = ctx.createBufferSource(); srcA.buffer = bufA;
   const srcB = ctx.createBufferSource(); srcB.buffer = bufB;
@@ -223,10 +234,14 @@ export function beatDropTransition(params: TransitionParams) {
   srcA.connect(gA).connect(ctx.destination);
   srcB.connect(gB).connect(ctx.destination);
 
-  const dropB = findPrimaryDrop(anaB);
+  const offsetA = userOffsetA !== undefined
+    ? Math.max(0, userOffsetA - spliceCenter)
+    : Math.max(30, bufA.duration - spliceCenter);
+
+  // If user specified Track B entry, use that instead of auto-detected drop
+  const dropB = userOffsetB ?? findPrimaryDrop(anaB);
   const whenB = Math.max(0, spliceCenter - dropB);
 
-  const offsetA = Math.max(30, bufA.duration - spliceCenter);
   srcA.start(0, offsetA);
   srcB.start(whenB, 0);
 
